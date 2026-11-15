@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 from fractions import Fraction
-import json
 import os
 from pathlib import Path
 import shutil
@@ -15,8 +14,7 @@ from time import monotonic
 
 import numpy as np
 
-from cartpole import Plant
-from simulation import Recovery
+from results import load_results
 
 
 class _VideoProgress:
@@ -351,27 +349,6 @@ def _encode_video(output, fig, render, frames, fps, progress):
         staged.replace(output)
     finally:
         staged.unlink(missing_ok=True)
-
-
-def load_results(source):
-    """Load the single saved trajectory and its model parameters."""
-    source = Path(source)
-    summary = json.loads((source / "summary.json").read_text())
-    data = np.loadtxt(source / "simulation.csv", delimiter=",", skiprows=1, ndmin=2)
-    trial = {"time": data[:, 0], "state": data[:, 1:5],
-             "force": data[:-1, 5], "requested_force": data[:-1, 6],
-             "disturbance": data[:-1, 7], "metrics": summary["trial"]}
-    actual = data[:, 5].copy()
-    if np.isnan(actual[-1]):  # Older CSVs left the terminal force empty.
-        actual[-1] = actual[-2]
-    trial["actuator_force"] = actual
-    trial["command_force"] = data[:-1, 8] if data.shape[1] >= 13 else trial["force"].copy()
-    trial["measured_state"] = data[:, 9:13] if data.shape[1] >= 13 else trial["state"].copy()
-    trial["estimated_state"] = data[:, 14:18] if data.shape[1] >= 18 else trial["measured_state"].copy()
-    trial["actuator_time_constant_s"] = summary.get("actuator", {}).get("response_time_constant_s", 0.0)
-    if data.shape[1] >= 14:
-        trial["cart_friction_force"] = data[:, 13]
-    return trial, summary["config"]["force_limit_N"], Plant(**summary["plant"]), Recovery(**summary["recovery"])
 
 
 def export_video(trial, force_limit, plant, recovery, output):

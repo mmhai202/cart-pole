@@ -19,7 +19,7 @@ from cartpole import Plant, design_lqr, dynamics, linearize
 from cartpole.model import cart_drive_force, cart_friction_force
 from simulation import Actuator, MeasurementNoise, Recovery, advance, advance_actuator, simulate
 from main import main
-from plotting import load_results
+from results import load_results
 
 
 class CartPoleTests(unittest.TestCase):
@@ -338,6 +338,18 @@ class CommandLineTests(unittest.TestCase):
         self.export.assert_called_once()
         self.assertEqual(self.export.call_args.args[-1], self.output / "simulation.mp4")
 
+    def test_disturbance_observer_config_reaches_controller_and_saved_results(self):
+        self.config["controller"] = {"disturbance_observer": {
+            "enabled": True, "filter_time_constant_s": .2, "compensation_gain": .4}}
+        self.config["force_push"] = [{"time_s": 1, "time_e": 2, "force_N": 1}]
+        summary = self.run_cli()
+        trial, *_ = load_results(self.output)
+        self.assertTrue(summary["disturbance_observer"]["enabled"])
+        self.assertEqual(len(summary["design"]["K"][0]), 4)
+        assert_allclose(trial["requested_force"],
+                        trial["nominal_force"] - .4 * trial["estimated_disturbance"][:-1])
+        self.assertGreater(np.max(np.abs(trial["estimated_disturbance"])), .1)
+
     def test_same_second_runs_keep_separate_configs_and_previous_results(self):
         fixed = datetime(2026, 11, 14, 15, 30, 45, tzinfo=timezone.utc)
         with patch("main.datetime") as clock:
@@ -391,6 +403,9 @@ class CommandLineTests(unittest.TestCase):
             assert_array_equal(loaded[key], original[key])
         self.assertEqual(summary["actuator"]["response_time_constant_s"], 0.05)
         self.assertEqual(summary["actuator"]["initial_force_N"], 0)
+        assert_allclose(summary["design"]["K"],
+                        design_lqr()["K"])
+        self.assertEqual(len(summary["lqr_state_order"]), 4)
         self.assertEqual(summary["measurement_noise"], self.config["measurement_noise"])
         self.assertEqual(loaded["actuator_time_constant_s"], 0.05)
         self.assertEqual(loaded["actuator_force"][0], 0)

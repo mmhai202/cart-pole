@@ -8,14 +8,17 @@ from io import StringIO
 import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
 import numpy as np
 
-from main import load_config
+from configuration import load_config
 from cartpole import design_lqr
-from scripts.optimize_lqr import Scenario, evaluate, main, performance_cost
+from cartpole_tuning.evaluation import Evaluator, Scenario, evaluate, performance_cost
+from cartpole_tuning.persistence import CheckpointWriter, write_trials
+from scripts.optimize_lqr import main
 
 
 class OptimizerTests(unittest.TestCase):
@@ -33,8 +36,8 @@ class OptimizerTests(unittest.TestCase):
         self.scenario = Scenario(self.path, load_config(self.path))
 
     def evaluate_metrics(self, metrics, quality):
-        with patch("scripts.optimize_lqr.simulate", side_effect=[{"metrics": m} for m in metrics]), \
-                patch("scripts.optimize_lqr.performance_cost", return_value=quality):
+        with patch("cartpole_tuning.evaluation.simulate", side_effect=[{"metrics": m} for m in metrics]), \
+                patch("cartpole_tuning.evaluation.performance_cost", return_value=quality):
             return evaluate([self.scenario], [100, 5, 300, 5], 0.03, [42, 43])
 
     def test_safety_and_recovery_priorities_cannot_be_offset_by_performance(self):
@@ -51,11 +54,21 @@ class OptimizerTests(unittest.TestCase):
     def test_optimizer_uses_configured_kalman(self):
         self.config["kalman"] = {"enabled": True}
         scenario = Scenario(self.path, self.config)
-        with patch("scripts.optimize_lqr.simulate", return_value={"metrics": {
+        with patch("cartpole_tuning.evaluation.simulate", return_value={"metrics": {
                 "success": True, "rail_safe": True}}) as run, \
-                patch("scripts.optimize_lqr.performance_cost", return_value=0):
+                patch("cartpole_tuning.evaluation.performance_cost", return_value=0):
             evaluate([scenario], [100, 5, 300, 5], .03, [42])
         self.assertTrue(run.call_args.kwargs["kalman"].enabled)
+
+    def test_optimizer_uses_configured_disturbance_observer(self):
+        self.config["controller"] = {"disturbance_observer": {"enabled": True}}
+        scenario = Scenario(self.path, self.config)
+        with patch("cartpole_tuning.evaluation.simulate", return_value={"metrics": {
+                "success": True, "rail_safe": True}}) as run, \
+                patch("cartpole_tuning.evaluation.performance_cost", return_value=0):
+            evaluate([scenario], [100, 5, 300, 5], .03, [42])
+        self.assertTrue(run.call_args.kwargs["disturbance_observer"].enabled)
+        np.testing.assert_allclose(run.call_args.args[1], design_lqr()["K"])
 
     def test_early_stop_does_not_avoid_terminal_state_error_cost(self):
         trial = {"time": np.array([0, 1]), "state": np.array([[0.1, 0, 0, 0]] * 2),
@@ -66,6 +79,75 @@ class OptimizerTests(unittest.TestCase):
         shorter = deepcopy(trial)
         shorter["time"] = np.array([0, 0.5])
         self.assertGreater(performance_cost(shorter, self.scenario), full)
+
+    def test_duplicate_candidates_reuse_evaluation_without_sharing_mutable_results(self):
+        result = {"score": 1, "cases": [{"seed": 42}]}
+        evaluator = Evaluator([self.scenario], [42])
+        with patch("cartpole_tuning.evaluation.evaluate", return_value=result) as run:
+            first = evaluator([100, 5, 300, 5], .03)
+            first["cases"][0]["seed"] = -1
+            second = evaluator((100, 5, 300, 5), .03)
+            self.assertEqual(second["cases"][0]["seed"], 42)
+            self.assertEqual(run.call_count, 1)
+            evaluator([100, 5, 300, 5], .04)
+            self.assertEqual(run.call_count, 2)
+
+    def test_validation_cache_is_separate_from_training(self):
+        training = Evaluator([self.scenario], [42])
+        validation = Evaluator([self.scenario], [1042])
+        with patch("cartpole_tuning.evaluation.evaluate", return_value={"score": 0}) as run:
+            training([100, 5, 300, 5], .03)
+            validation([100, 5, 300, 5], .03)
+        self.assertEqual([call.args[3] for call in run.call_args_list], [(42,), (1042,)])
+
+    def test_empty_evaluation_is_rejected_instead_of_producing_nan(self):
+        for scenarios, seeds in (([], [42]), ([self.scenario], [])):
+            with self.subTest(seeds=seeds), self.assertRaises(ValueError):
+                evaluate(scenarios, [100, 5, 300, 5], .03, seeds)
+
+    def test_failed_csv_write_preserves_previous_checkpoint(self):
+        path = self.folder / "trials.csv"
+        path.write_text("previous checkpoint\n")
+        trial = SimpleNamespace(number=0, state=SimpleNamespace(name="COMPLETE"),
+                                value=1, params={}, user_attrs={}, duration=None)
+        with patch("cartpole_tuning.persistence.csv.writer") as writer:
+            writer.return_value.writerow.side_effect = [None, OSError("disk full")]
+            with self.assertRaises(OSError):
+                write_trials(path, [trial])
+        self.assertEqual(path.read_text(), "previous checkpoint\n")
+        self.assertFalse(path.with_suffix(".csv.tmp").exists())
+
+    @unittest.skipUnless(importlib.util.find_spec("optuna"), "Install .[optimize] for checkpoint checks")
+    def test_checkpoint_recomputes_gains_only_when_the_best_changes(self):
+        import optuna
+
+        study = optuna.create_study()
+        params = dict(zip(("q_position", "q_velocity", "q_angle", "q_angular_velocity", "r"),
+                          [100, 5, 300, 5, .03]))
+        distributions = {name: optuna.distributions.FloatDistribution(1e-6, 1e6, log=True)
+                         for name in params}
+
+        def add_candidate(score, r=.03):
+            study.add_trial(optuna.trial.create_trial(
+                value=score, params={**params, "r": r}, distributions=distributions,
+                user_attrs={"evaluation": {"score": score}},
+            ))
+
+        writer = CheckpointWriter(self.folder, [self.scenario], {"score": 1})
+        with patch("cartpole_tuning.persistence.design_lqr", wraps=design_lqr) as design:
+            add_candidate(1)
+            writer.save(study)
+            add_candidate(2, .04)
+            report = writer.save(study)
+            self.assertEqual(design.call_count, 1)
+            self.assertEqual(report["best"]["trial"], 0)
+            add_candidate(.5, .05)
+            report = writer.save(study)
+            self.assertEqual(design.call_count, 2)
+            self.assertEqual(report["best"]["trial"], 2)
+        self.assertEqual(load_config(self.folder / "best_config.json")["controller"]["lqr"]["r"], .05)
+        with (self.folder / "trials.csv").open() as stream:
+            self.assertEqual(len(list(csv.DictReader(stream))), 3)
 
     @unittest.skipUnless(importlib.util.find_spec("optuna"), "Install .[optimize] for TPE integration checks")
     def test_tpe_resume_matches_uninterrupted_run_and_preserves_input(self):
@@ -120,6 +202,23 @@ class OptimizerTests(unittest.TestCase):
             main([*shared, "--trials", "1", "--output", str(resumed), "--resume"])
         self.assertEqual(error.exception.code, 2)
         self.assertEqual((resumed / "trials.csv").read_bytes(), csv_before)
+
+    @unittest.skipUnless(importlib.util.find_spec("optuna"), "Install .[optimize] for CLI checks")
+    def test_interrupt_before_first_trial_saves_a_resumable_checkpoint(self):
+        output = self.folder / "interrupted"
+        args = [str(self.path), "--trials", "1", "--seeds", "42",
+                "--validation-seeds", "1042", "--output", str(output)]
+        with redirect_stdout(StringIO()), patch("optuna.study.Study.optimize", side_effect=KeyboardInterrupt):
+            self.assertEqual(main(args), 130)
+        report = json.loads((output / "report.json").read_text())
+        self.assertEqual(report["status"], "interrupted")
+        self.assertEqual(report["completed_trials"], 0)
+        self.assertIsNone(report["best"])
+        with redirect_stdout(StringIO()):
+            self.assertEqual(main([*args, "--resume"]), 0)
+        report = json.loads((output / "report.json").read_text())
+        self.assertEqual(report["status"], "complete")
+        self.assertEqual(report["completed_trials"], 1)
 
     @unittest.skipUnless(importlib.util.find_spec("optuna"), "Install .[optimize] for CLI checks")
     def test_overlapping_seeds_are_rejected_before_creating_output(self):

@@ -10,8 +10,9 @@ from numpy.testing import assert_allclose, assert_array_equal
 
 from cartpole import Plant, design_lqr
 from cartpole.kalman import KalmanSettings, KalmanFilter
-from main import kalman_settings, save_trial
-from plotting import load_results
+from configuration import kalman_settings
+from results import save_trial
+from results import load_results
 from simulation import Actuator, MeasurementNoise, Recovery, simulate
 from dataclasses import asdict
 
