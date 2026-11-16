@@ -53,4 +53,8 @@ def load_results(source):
     trial["actuator_time_constant_s"] = summary.get("actuator", {}).get("response_time_constant_s", 0.0)
     if data.shape[1] >= 14:
         trial["cart_friction_force"] = data[:, 13]
-    return trial, summary["config"]["force_limit_N"], Plant(**summary["plant"]), Recovery(**summary["recovery"])
+    config = summary["config"]
+    # Support earlier configs with top-level actuator or force_limit_N fields.
+    actuator = config.get("simulation", {}).get("actuator", config.get("actuator", {}))
+    force_limit = actuator["force_limit_N"] if "force_limit_N" in actuator else config["force_limit_N"]
+    return trial, force_limit, Plant(**summary["plant"]), Recovery(**summary["recovery"])

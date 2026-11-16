@@ -17,7 +17,7 @@ import numpy as np
 from configuration import load_config
 from cartpole import design_lqr
 from cartpole_tuning.evaluation import Evaluator, Scenario, evaluate, performance_cost
-from cartpole_tuning.persistence import CheckpointWriter, write_trials
+from cartpole_tuning.persistence import CheckpointWriter, candidate_config, write_trials
 from scripts.optimize_lqr import main
 
 
@@ -28,10 +28,11 @@ class OptimizerTests(unittest.TestCase):
         self.folder = Path(temporary.name)
         self.path = self.folder / "case.json"
         self.config = {
-            "duration_s": 1, "initial": {"position_m": 0, "velocity_m_s": 0,
-                                           "angle_deg": 1, "angular_velocity_deg_s": 0},
-            "force_limit_N": 15, "force_push": [],
-            "measurement_noise": {"angle_std_deg": 0.1, "seed": 42}}
+            "simulation": {
+                "duration_s": 1, "initial": {"position_m": 0, "velocity_m_s": 0,
+                                               "angle_deg": 1, "angular_velocity_deg_s": 0},
+                "force_push": [], "measurement_noise": {"angle_std_deg": 0.1, "seed": 42},
+                "actuator": {"force_limit_N": 15}}}
         self.path.write_text(json.dumps(self.config))
         self.scenario = Scenario(self.path, load_config(self.path))
 
@@ -52,13 +53,30 @@ class OptimizerTests(unittest.TestCase):
         self.assertLess(one_recovered["score"], none_recovered["score"])
 
     def test_optimizer_uses_configured_kalman(self):
-        self.config["kalman"] = {"enabled": True}
+        self.config.setdefault("controller", {})["kalman"] = {"enabled": True}
         scenario = Scenario(self.path, self.config)
         with patch("cartpole_tuning.evaluation.simulate", return_value={"metrics": {
                 "success": True, "rail_safe": True}}) as run, \
                 patch("cartpole_tuning.evaluation.performance_cost", return_value=0):
             evaluate([scenario], [100, 5, 300, 5], .03, [42])
         self.assertTrue(run.call_args.kwargs["kalman"].enabled)
+        config = candidate_config(scenario, [100, 5, 300, 5], .03)
+        self.assertEqual(config["controller"]["kalman"], {"enabled": True})
+        self.assertNotIn("kalman", config)
+
+    def test_optimizer_preserves_and_uses_nested_actuator_force_limit(self):
+        self.config["simulation"]["actuator"] = {"force_limit_N": 3, "response_time_constant_s": .1}
+        scenario = Scenario(self.path, self.config)
+        with patch("cartpole_tuning.evaluation.simulate", return_value={"metrics": {
+                "success": True, "rail_safe": True}}) as run, \
+                patch("cartpole_tuning.evaluation.performance_cost", return_value=0):
+            evaluate([scenario], [100, 5, 300, 5], .03, [42])
+        self.assertEqual(run.call_args.args[2], 3)
+        self.assertEqual(run.call_args.kwargs["actuator"].response_time_constant_s, .1)
+        config = candidate_config(scenario, [100, 5, 300, 5], .03)
+        self.assertEqual(config["simulation"]["actuator"], self.config["simulation"]["actuator"])
+        self.assertEqual(config["simulation"], self.config["simulation"])
+        self.assertNotIn("force_limit_N", config)
 
     def test_optimizer_uses_configured_disturbance_observer(self):
         self.config["controller"] = {"disturbance_observer": {"enabled": True}}
@@ -179,6 +197,7 @@ class OptimizerTests(unittest.TestCase):
         self.assertEqual(report["completed_trials"], 3)
         self.assertEqual(report["validation"]["best"]["cases"][0]["seed"], 1042)
         best = load_config(resumed / "best_config.json")
+        self.assertEqual(best["simulation"], self.config["simulation"])
         self.assertEqual(best["controller"]["lqr"]["q"], report["best"]["q"])
         self.assertEqual(best["controller"]["lqr"]["r"], studies[0].best_params["r"])
         self.assertEqual(report["best"]["r"], studies[0].best_params["r"])
@@ -196,7 +215,7 @@ class OptimizerTests(unittest.TestCase):
         np.testing.assert_allclose(manifest["bounds"]["r"], [0.0003, 3])
         self.assertFalse(list(resumed.rglob("*.mp4")))
         csv_before = (resumed / "trials.csv").read_bytes()
-        self.config["force_limit_N"] = 14
+        self.config["simulation"]["actuator"]["force_limit_N"] = 14
         self.path.write_text(json.dumps(self.config))
         with redirect_stderr(StringIO()), self.assertRaises(SystemExit) as error:
             main([*shared, "--trials", "1", "--output", str(resumed), "--resume"])

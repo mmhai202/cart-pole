@@ -287,21 +287,24 @@ class CommandLineTests(unittest.TestCase):
         self.results_root = self.output
         self.stdout = StringIO()
         self.config = json.loads((Path(__file__).resolve().parents[1] / "config.json").read_text())
+        self.simulation = self.config["simulation"]
         self.config.pop("controller", None)
         self.config.pop("video", None)
-        self.config.pop("actuator", None)
-        self.config.pop("measurement_noise", None)
-        self.config.pop("friction", None)
-        self.config.pop("kalman", None)
-        self.config["force_push"] = []
+        self.simulation["actuator"] = {"force_limit_N": 15}
+        self.simulation.pop("measurement_noise", None)
+        self.simulation.pop("friction", None)
+        self.simulation["force_push"] = []
         # Keep test fixtures independent of the user's current experiment.
-        self.config["initial"] = {"angle_deg": 5, "angular_velocity_deg_s": 0,
-                                  "position_m": 0, "velocity_m_s": 0}
+        self.simulation["initial"] = {"angle_deg": 5, "angular_velocity_deg_s": 0,
+                                      "position_m": 0, "velocity_m_s": 0}
         self.config_path = Path(temporary.name) / "case.json"
         exporter = patch("main.export_video")
         self.export = exporter.start()
         self.export.side_effect = lambda *args, **kwargs: args[4].touch()
         self.addCleanup(exporter.stop)
+
+    def with_simulation(self, **changes):
+        return {**self.config, "simulation": {**self.simulation, **changes}}
 
     def run_cli(self, *flags, config=None):
         config = self.config if config is None else config
@@ -320,8 +323,10 @@ class CommandLineTests(unittest.TestCase):
         self.assertEqual(summary["duration_s"], 10)
         self.assertEqual(summary["dt_s"], 0.05)
         self.assertEqual(summary["integration_substeps"], 25)
+        self.assertFalse(summary["kalman"]["enabled"])
+        self.assertEqual(summary["trial"]["controller_state_source"], "measured")
         assert_allclose(summary["design"]["K"], design_lqr(dt=0.05)["K"])
-        self.assertEqual(set(summary["config"]), {"duration_s", "initial", "force_limit_N", "force_push"})
+        self.assertEqual(set(summary["config"]), {"simulation"})
         trial, limit, _, _ = load_results(self.output)
         self.assertEqual(limit, 15)
         assert_allclose(np.diff(trial["time"]), 0.05, atol=1e-12)
@@ -341,7 +346,7 @@ class CommandLineTests(unittest.TestCase):
     def test_disturbance_observer_config_reaches_controller_and_saved_results(self):
         self.config["controller"] = {"disturbance_observer": {
             "enabled": True, "filter_time_constant_s": .2, "compensation_gain": .4}}
-        self.config["force_push"] = [{"time_s": 1, "time_e": 2, "force_N": 1}]
+        self.simulation["force_push"] = [{"time_s": 1, "time_e": 2, "force_N": 1}]
         summary = self.run_cli()
         trial, *_ = load_results(self.output)
         self.assertTrue(summary["disturbance_observer"]["enabled"])
@@ -357,7 +362,7 @@ class CommandLineTests(unittest.TestCase):
             self.run_cli()
             first = self.output
             before = {path.name: path.read_bytes() for path in first.iterdir()}
-            self.config["initial"]["angle_deg"] = -5
+            self.simulation["initial"]["angle_deg"] = -5
             self.run_cli()
         self.assertEqual(first.name, "20261114-153045")
         self.assertEqual(self.output.name, "20261114-153045_01")
@@ -369,7 +374,7 @@ class CommandLineTests(unittest.TestCase):
     def test_custom_controller_period_and_weights_reach_outputs(self):
         self.config["controller"] = {"dt": 0.1,
                                      "lqr": {"q": [30, 5, 300, 5], "r": 0.1}}
-        self.config["force_push"] = [{"force_N": 2, "time_s": 0.2, "time_e": 0.4}]
+        self.simulation["force_push"] = [{"force_N": 2, "time_s": 0.2, "time_e": 0.4}]
         summary = self.run_cli()
         expected = design_lqr(dt=0.1, q=(30, 5, 300, 5), r=0.1)
         self.assertEqual(summary["dt_s"], 0.1)
@@ -391,8 +396,8 @@ class CommandLineTests(unittest.TestCase):
         self.assertEqual(json.loads((self.output / "config.json").read_text()), self.config)
 
     def test_motor_and_measurements_round_trip_through_csv_and_summary(self):
-        self.config["actuator"] = {"response_time_constant_s": 0.05}
-        self.config["measurement_noise"] = {
+        self.simulation["actuator"]["response_time_constant_s"] = 0.05
+        self.simulation["measurement_noise"] = {
             "position_std_m": 0.001, "velocity_std_m_s": 0.01,
             "angle_std_deg": 0.1, "angular_velocity_std_deg_s": 1, "seed": 42}
         summary = self.run_cli()
@@ -406,13 +411,28 @@ class CommandLineTests(unittest.TestCase):
         assert_allclose(summary["design"]["K"],
                         design_lqr()["K"])
         self.assertEqual(len(summary["lqr_state_order"]), 4)
-        self.assertEqual(summary["measurement_noise"], self.config["measurement_noise"])
+        self.assertEqual(summary["measurement_noise"], self.simulation["measurement_noise"])
         self.assertEqual(loaded["actuator_time_constant_s"], 0.05)
         self.assertEqual(loaded["actuator_force"][0], 0)
         self.assertFalse(np.array_equal(loaded["state"], loaded["measured_state"]))
 
+    def test_nested_actuator_force_limit_reaches_simulation_and_saved_results(self):
+        self.simulation["actuator"] = {"force_limit_N": 3, "response_time_constant_s": 0.05}
+        summary = self.run_cli()
+        trial, limit, _, _ = load_results(self.output)
+        self.assertEqual(limit, 3)
+        self.assertEqual(self.export.call_args.args[1], 3)
+        self.assertEqual(summary["actuator"]["force_limit_N"], 3)
+        self.assertEqual(summary["trial"]["force_limit_N"], 3)
+        self.assertEqual(summary["config"]["simulation"]["actuator"], self.simulation["actuator"])
+        self.assertNotIn("actuator", summary["config"])
+        self.assertNotIn("force_limit_N", summary["config"])
+        self.assertGreater(np.max(np.abs(trial["requested_force"])), 3)
+        self.assertLessEqual(np.max(np.abs(trial["command_force"])), 3)
+        self.assertLessEqual(np.max(np.abs(trial["actuator_force"])), 3)
+
     def test_friction_config_reaches_plant_design_saved_data_and_video(self):
-        self.config["friction"] = {"cart_static_force_N": 0.3, "cart_sliding_force_N": 0.2,
+        self.simulation["friction"] = {"cart_static_force_N": 0.3, "cart_sliding_force_N": 0.2,
                                    "cart_viscous_N_s_m": 0.15, "pole_viscous_N_m_s_rad": 0.01}
         summary = self.run_cli()
         trial, _, plant, _ = load_results(self.output)
@@ -437,6 +457,13 @@ class CommandLineTests(unittest.TestCase):
         assert_array_equal(loaded["measured_state"], loaded["state"])
         assert_array_equal(loaded["command_force"], loaded["force"])
         self.assertEqual(loaded["actuator_force"][-1], loaded["force"][-1])
+        summary_path = self.output / "summary.json"
+        summary = json.loads(summary_path.read_text())
+        for config in ({"actuator": {"force_limit_N": 15}}, {"force_limit_N": 15}):
+            with self.subTest(config=config):
+                summary_path.write_text(json.dumps({**summary, "config": config}))
+                _, limit, _, _ = load_results(self.output)
+                self.assertEqual(limit, 15)
 
     def test_invalid_optional_settings_are_rejected_before_writing(self):
         options = [{"controller": value} for value in (None, [], True, "LQR")]
@@ -451,19 +478,24 @@ class CommandLineTests(unittest.TestCase):
                                   [1, 1, "1", 1], [1, 1, float("inf"), 1])]
         options += [{"controller": {"lqr": {"r": value}}}
                     for value in (True, "0.1", 0, -1, None, float("nan"))]
+        options += [{"controller": {"kalman": value}}
+                    for value in (None, [], True, {"unknown": 1}, {"enabled": 1},
+                                  {"process_std": [1, 2, 3]})]
+        options += [{"kalman": {"enabled": True}}]
         options += [{"video": value} for value in (None, [], True, {"unknown": 1})]
         options += [{"video": {"fps": value}} for value in (True, "20", 20.0, 0, 121)]
-        options += [{name: value} for name in ("actuator", "measurement_noise")
+        options += [self.with_simulation(actuator=value) for value in (None, True, [], {"unknown": 1})]
+        options += [self.with_simulation(measurement_noise=value)
                     for value in (None, True, [], {"unknown": 1})]
-        options += [{"actuator": {"response_time_constant_s": value}}
+        options += [self.with_simulation(actuator={"force_limit_N": 15, "response_time_constant_s": value})
                     for value in (True, "0.05", -1, None, float("nan"), float("inf"))]
-        options += [{"measurement_noise": {field: value}}
+        options += [self.with_simulation(measurement_noise={field: value})
                     for field in ("position_std_m", "velocity_std_m_s", "angle_std_deg", "angular_velocity_std_deg_s")
                     for value in (True, "0.1", -1, None, float("nan"), float("inf"))]
-        options += [{"measurement_noise": {"seed": value}} for value in (-1, True, 1.5, "42")]
-        options += [{"friction": value} for value in (None, True, [], {"unknown": 1},
+        options += [self.with_simulation(measurement_noise={"seed": value}) for value in (-1, True, 1.5, "42")]
+        options += [self.with_simulation(friction=value) for value in (None, True, [], {"unknown": 1},
                     {"cart_static_force_N": 0.1, "cart_sliding_force_N": 0.2})]
-        options += [{"friction": {field: value}}
+        options += [self.with_simulation(friction={field: value})
                     for field in ("cart_static_force_N", "cart_sliding_force_N",
                                   "cart_viscous_N_s_m", "pole_viscous_N_m_s_rad")
                     for value in (True, "0.1", -1, None, float("nan"), float("inf"))]
@@ -475,11 +507,13 @@ class CommandLineTests(unittest.TestCase):
                 self.assertFalse(self.results_root.exists())
 
     def test_kalman_config_reaches_controller_and_saved_results(self):
-        self.config["kalman"] = {"enabled": True, "process_std": [0.02, 1, 0.04, 2]}
-        self.config["measurement_noise"] = {"angle_std_deg": 0.1}
+        self.config.setdefault("controller", {})["kalman"] = {"enabled": True, "process_std": [0.02, 1, 0.04, 2]}
+        self.simulation["measurement_noise"] = {"angle_std_deg": 0.1}
         summary = self.run_cli()
         trial, _, _, _ = load_results(self.output)
         self.assertTrue(summary["kalman"]["enabled"])
+        self.assertEqual(summary["config"]["controller"]["kalman"], self.config["controller"]["kalman"])
+        self.assertNotIn("kalman", summary["config"])
         self.assertEqual(summary["trial"]["controller_state_source"], "kalman")
         assert_allclose(trial["requested_force"],
                         -trial["estimated_state"][:-1] @ np.array(summary["design"]["K"]).ravel())
@@ -488,9 +522,9 @@ class CommandLineTests(unittest.TestCase):
     def test_custom_period_rejects_unaligned_duration_and_pushes(self):
         self.config["controller"] = {"dt": 0.1}
         invalid = [
-            {**self.config, "duration_s": 1.05},
-            {**self.config, "force_push": [{"force_N": 1, "time_s": 0.15, "time_e": 0.35}]},
-            {**self.config, "force_push": [{"force_N": 1, "time_s": 0.2, "time_e": 0.35}]},
+            self.with_simulation(duration_s=1.05),
+            self.with_simulation(force_push=[{"force_N": 1, "time_s": 0.15, "time_e": 0.35}]),
+            self.with_simulation(force_push=[{"force_N": 1, "time_s": 0.2, "time_e": 0.35}]),
         ]
         for config in invalid:
             with self.subTest(config=config), redirect_stderr(StringIO()):
@@ -514,7 +548,7 @@ class CommandLineTests(unittest.TestCase):
         from plotting import main as video_main
         self.run_cli()
         first = self.output
-        self.config["initial"]["angle_deg"] = -5
+        self.simulation["initial"]["angle_deg"] = -5
         self.run_cli()
         latest = self.output
         summaries = list(self.results_root.glob("*/summary.json"))
@@ -527,9 +561,9 @@ class CommandLineTests(unittest.TestCase):
                 self.assertEqual(export.call_args.args[4], first / "simulation.mp4")
 
     def test_angle_force_and_time_configure_one_combined_trajectory(self):
-        self.config["initial"]["angle_deg"] = 0
-        self.config["force_limit_N"] = 15
-        self.config["force_push"] = [{"force_N": 20, "time_s": 1, "time_e": 1.1}]
+        self.simulation["initial"]["angle_deg"] = 0
+        self.simulation["actuator"]["force_limit_N"] = 15
+        self.simulation["force_push"] = [{"force_N": 20, "time_s": 1, "time_e": 1.1}]
         summary = self.run_cli()
         self.assertEqual(summary["config"], self.config)
         trial, limit, _, _ = load_results(self.output)
@@ -541,8 +575,8 @@ class CommandLineTests(unittest.TestCase):
         self.assertTrue((self.output / "simulation.csv").is_file())
 
     def test_multiple_pushes_from_json_reach_csv_summary_and_video(self):
-        self.config["initial"]["angle_deg"] = 0
-        self.config["force_push"] = [
+        self.simulation["initial"]["angle_deg"] = 0
+        self.simulation["force_push"] = [
             {"force_N": -4, "time_s": 5, "time_e": 5.15},
             {"force_N": 10, "time_s": 2, "time_e": 2.25},
             {"force_N": -3, "time_s": 2.05, "time_e": 2.2},
@@ -559,7 +593,7 @@ class CommandLineTests(unittest.TestCase):
         self.assertEqual(summary["force_push"], [
             {"start_s": push["time_s"], "duration_s": push["time_e"] - push["time_s"],
              "force_N": push["force_N"]}
-            for push in self.config["force_push"]
+            for push in self.simulation["force_push"]
         ])
 
     def test_push_end_sets_duration_and_hides_arrow_at_exclusive_endpoint(self):
@@ -568,11 +602,11 @@ class CommandLineTests(unittest.TestCase):
         import matplotlib.pyplot as plt
         from matplotlib.patches import FancyArrowPatch
 
-        self.config["duration_s"] = 2
-        self.config["initial"]["angle_deg"] = 0
+        self.simulation["duration_s"] = 2
+        self.simulation["initial"]["angle_deg"] = 0
         for end in (1.05, 1.25, 2):
             with self.subTest(time_e=end):
-                self.config["force_push"] = [{"force_N": 1, "time_s": 1, "time_e": end}]
+                self.simulation["force_push"] = [{"force_N": 1, "time_s": 1, "time_e": end}]
                 summary = self.run_cli()
                 trial, limit, plant, recovery = load_results(self.output)
                 steps = round((end - 1) / 0.05)
@@ -581,7 +615,7 @@ class CommandLineTests(unittest.TestCase):
                 self.assertAlmostEqual(np.sum(trial["disturbance"]) * 0.05, end - 1)
                 assert_allclose(trial["state"][:21], 0, atol=1e-14)
                 self.assertGreater(trial["state"][21, 1], 0)
-                self.assertEqual(summary["config"]["force_push"][0]["time_e"], end)
+                self.assertEqual(summary["config"]["simulation"]["force_push"][0]["time_e"], end)
                 self.assertAlmostEqual(summary["force_push"][0]["duration_s"], end - 1)
                 fig, update, _ = build_scene(trial, limit, plant, recovery)
                 try:
@@ -597,11 +631,11 @@ class CommandLineTests(unittest.TestCase):
                     plt.close(fig)
 
     def test_configured_duration_controls_data_video_and_push_horizon(self):
-        self.config["initial"]["angle_deg"] = 0
+        self.simulation["initial"]["angle_deg"] = 0
         for duration in (2, 12):
             with self.subTest(duration=duration):
-                self.config["duration_s"] = duration
-                self.config["force_push"] = [{"force_N": 1, "time_s": duration - 0.1,
+                self.simulation["duration_s"] = duration
+                self.simulation["force_push"] = [{"force_N": 1, "time_s": duration - 0.1,
                                               "time_e": duration}]
                 summary = self.run_cli()
                 trial, _, _, _ = load_results(self.output)
@@ -612,10 +646,10 @@ class CommandLineTests(unittest.TestCase):
                 self.assertEqual(self.export.call_args.args[0]["time"][-1], duration)
 
     def test_all_initial_states_preserve_signed_velocities_and_units(self):
-        self.config["force_limit_N"] = 10
+        self.simulation["actuator"]["force_limit_N"] = 10
         for angular_velocity, velocity in ((-12, -0.4), (12, 0.4), (-12, 0.4), (12, -0.4)):
             with self.subTest(angular_velocity=angular_velocity, velocity=velocity):
-                self.config["initial"] = {
+                self.simulation["initial"] = {
                     "angle_deg": -8, "angular_velocity_deg_s": angular_velocity,
                     "position_m": 0.3, "velocity_m_s": velocity,
                 }
@@ -629,8 +663,8 @@ class CommandLineTests(unittest.TestCase):
                 self.assertEqual(summary["initial_velocity_m_s"], velocity)
 
     def test_configured_simulation_is_always_passed_to_video_exporter(self):
-        self.config["initial"]["angle_deg"] = 10
-        self.config["force_limit_N"] = 15
+        self.simulation["initial"]["angle_deg"] = 10
+        self.simulation["actuator"]["force_limit_N"] = 15
         self.run_cli()
         self.export.assert_called_once()
         trial, limit, _, _, output = self.export.call_args.args
@@ -641,11 +675,11 @@ class CommandLineTests(unittest.TestCase):
     def test_single_limit_video_encodes_without_an_empty_comparison_panel(self):
         import imageio_ffmpeg
         from plotting import export_video
-        self.config["duration_s"] = 1.2
+        self.simulation["duration_s"] = 1.2
         self.config["controller"] = {"dt": 0.03}
-        self.config["actuator"] = {"response_time_constant_s": 0.05}
-        self.config["measurement_noise"] = {"angle_std_deg": 0.1, "seed": 42}
-        self.config["friction"] = {"cart_static_force_N": 0.3, "cart_sliding_force_N": 0.2}
+        self.simulation["actuator"]["response_time_constant_s"] = 0.05
+        self.simulation["measurement_noise"] = {"angle_std_deg": 0.1, "seed": 42}
+        self.simulation["friction"] = {"cart_static_force_N": 0.3, "cart_sliding_force_N": 0.2}
         self.export.side_effect = export_video
         self.run_cli()
         output = self.output / "simulation.mp4"
@@ -664,22 +698,29 @@ class CommandLineTests(unittest.TestCase):
 
     def test_invalid_json_values_are_rejected_before_writing(self):
         invalid = [[], {}, {**self.config, "unknown": 1}, {**self.config, "push": {}},
-                   {**self.config, "force_push": {}}, {**self.config, "force_push": None},
-                   {**self.config, "force_push": [None]},
-                   {**self.config, "force_push": [{"force_N": 5}]},
-                   {**self.config, "force_push": [{"force_N": 5, "time_s": 1}]},
-                   {**self.config, "force_push": [{"force_N": 5, "time_s": 1,
-                                                   "time_e": 1.1, "extra": 0}]},
-                   {**self.config, "initial": {"angle_deg": 5, "position_m": 0}}]
+                   self.with_simulation(actuator={}),
+                   self.with_simulation(actuator={"response_time_constant_s": 0.05}),
+                   {**self.config, "force_limit_N": 15},
+                   self.with_simulation(force_push={}), self.with_simulation(force_push=None),
+                   self.with_simulation(force_push=[None]),
+                   self.with_simulation(force_push=[{"force_N": 5}]),
+                   self.with_simulation(force_push=[{"force_N": 5, "time_s": 1}]),
+                   self.with_simulation(force_push=[{"force_N": 5, "time_s": 1,
+                                                     "time_e": 1.1, "extra": 0}]),
+                   self.with_simulation(initial={"angle_deg": 5, "position_m": 0})]
+        invalid += [{**self.config, "simulation": value}
+                    for value in (None, [], True, {}, {"duration_s": 10},
+                                  {**self.simulation, "unknown": 1})]
+        invalid += [{**self.config, field: value} for field, value in self.simulation.items()]
         changes = [
             ("duration_s", None, 0), ("duration_s", None, -1),
             ("duration_s", None, True), ("duration_s", None, "10"),
             ("duration_s", None, float("inf")), ("duration_s", None, float("nan")),
             ("duration_s", None, 0.5), ("duration_s", None, 2.01),
-            ("force_limit_N", None, 0), ("force_limit_N", None, -1),
-            ("force_limit_N", None, [5, 15]), ("force_limit_N", None, True),
-            ("force_limit_N", None, float("inf")),
-            ("force_limit_N", None, "15"), ("force_push", "time_s", 2.01),
+            ("actuator", "force_limit_N", 0), ("actuator", "force_limit_N", -1),
+            ("actuator", "force_limit_N", [5, 15]), ("actuator", "force_limit_N", True),
+            ("actuator", "force_limit_N", float("inf")),
+            ("actuator", "force_limit_N", "15"), ("force_push", "time_s", 2.01),
             ("force_push", "time_s", -1), ("force_push", "time_s", 9.92),
             ("force_push", "time_s", True), ("force_push", "time_s", "2"),
             ("force_push", "time_e", None), ("force_push", "time_e", True),
@@ -700,17 +741,18 @@ class CommandLineTests(unittest.TestCase):
         ]
         for section, key, value in changes:
             config = json.loads(json.dumps(self.config))
+            target = config["simulation"] if section in self.simulation else config
             if key is None:
-                config[section] = value
+                target[section] = value
             elif section == "force_push":
-                config[section] = [{"force_N": 2, "time_s": 1, "time_e": 1.1},
+                target[section] = [{"force_N": 2, "time_s": 1, "time_e": 1.1},
                                    {"force_N": 5, "time_s": 2, "time_e": 2.1}]
-                config[section][1][key] = value
+                target[section][1][key] = value
             else:
-                config[section][key] = value
+                target[section][key] = value
             invalid.append(config)
-        invalid.append({**self.config, "duration_s": 2,
-                        "force_push": [{"force_N": 1, "time_s": 2, "time_e": 2.1}]})
+        invalid.append(self.with_simulation(duration_s=2,
+                       force_push=[{"force_N": 1, "time_s": 2, "time_e": 2.1}]))
         for config in invalid:
             with self.subTest(config=config), redirect_stderr(StringIO()):
                 with self.assertRaises(SystemExit) as error:

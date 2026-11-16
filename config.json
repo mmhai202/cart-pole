@@ -1,15 +1,56 @@
 {
-  "duration_s": 10,
+  "simulation": {
+    "duration_s": 10,
+    "initial": {
+      "position_m": 0.5,
+      "velocity_m_s": 0,
+      "angle_deg": 5,
+      "angular_velocity_deg_s": 0
+    },
+    "friction": {
+      "cart_static_force_N": 0.3,
+      "cart_sliding_force_N": 0.2,
+      "cart_viscous_N_s_m": 0.1,
+      "pole_viscous_N_m_s_rad": 0.005
+    },
+    "measurement_noise": {
+      "position_std_m": 0.001,
+      "velocity_std_m_s": 0.01,
+      "angle_std_deg": 0.1,
+      "angular_velocity_std_deg_s": 1.0,
+      "seed": 42
+    },
+    "force_push": [
+      {
+        "time_s": 3,
+        "time_e": 6,
+        "force_N": 8
+      }
+    ],
+    "actuator": {
+      "force_limit_N": 15,
+      "response_time_constant_s": 0.05
+    }
+  },
   "controller": {
     "dt": 0.05,
     "lqr": {
       "q": [
-        8.650835422325741,
-        36.87826822171239,
-        92.0556012756067,
-        30.3740352006278
+        127.97717414717475,
+        130.42069174345198,
+        4.813765340321517,
+        429.3749323967405
       ],
-      "r": 0.23120058511636843
+      "r": 0.0029221544695955046
+    },
+    "kalman": {
+      "enabled": true,
+      "process_std": [
+        0.04,
+        2,
+        0.08,
+        4
+      ]
     },
     "disturbance_observer": {
       "enabled": true,
@@ -17,49 +58,5 @@
       "compensation_gain": 0.5,
       "estimate_limit_N": 30.0
     }
-  },
-  "force_limit_N": 15,
-  "actuator": {
-    "response_time_constant_s": 0.05
-  },
-  "friction": {
-    "cart_static_force_N": 0.3,
-    "cart_sliding_force_N": 0.2,
-    "cart_viscous_N_s_m": 0.1,
-    "pole_viscous_N_m_s_rad": 0.005
-  },
-  "measurement_noise": {
-    "position_std_m": 0.001,
-    "velocity_std_m_s": 0.01,
-    "angle_std_deg": 0.1,
-    "angular_velocity_std_deg_s": 1.0,
-    "seed": 42
-  },
-  "initial": {
-    "position_m": 0.5,
-    "velocity_m_s": 0,
-    "angle_deg": 5,
-    "angular_velocity_deg_s": 0
-  },
-  "force_push": [
-    {
-      "time_s": 2,
-      "time_e": 3,
-      "force_N": 8
-    },
-    {
-      "time_s": 6,
-      "time_e": 7,
-      "force_N": -5
-    }
-  ],
-  "kalman": {
-    "enabled": true,
-    "process_std": [
-      0.04,
-      2,
-      0.08,
-      4
-    ]
   }
 }

@@ -21,25 +21,26 @@ class Experiment:
         self.observer = observer_settings(config)
         self.plant = plant_settings(config)
         self.actuator, self.noise = physical_settings(config)
-        self.duration = config["duration_s"]
-        self.limit = config["force_limit_N"]
+        simulation = config["simulation"]
+        self.duration = simulation["duration_s"]
+        self.limit = simulation["actuator"]["force_limit_N"]
         # Keep integration steps at most 2 ms as the control period changes.
         self.substeps = max(1, int(np.ceil(self.dt / 0.002)))
         self.recovery = Recovery()
-        initial = config["initial"]
+        initial = simulation["initial"]
         self.initial = [initial["position_m"], initial["velocity_m_s"],
                         np.deg2rad(initial["angle_deg"]), np.deg2rad(initial["angular_velocity_deg_s"])]
         self.pushes = [(push["time_s"], push["time_e"] - push["time_s"], push["force_N"])
-                       for push in config["force_push"]]
+                       for push in simulation["force_push"]]
 
     def summary(self, design, trial):
         """Describe the resolved model, controller and measured run outcomes."""
-        initial = self.config["initial"]
+        initial = self.config["simulation"]["initial"]
         return {
             "plant": asdict(self.plant), "recovery": asdict(self.recovery), "dt_s": self.dt,
             "integration_substeps": self.substeps, "duration_s": self.duration,
             "config": self.config,
-            "actuator": {**asdict(self.actuator), "initial_force_N": 0.0},
+            "actuator": {**asdict(self.actuator), "force_limit_N": self.limit, "initial_force_N": 0.0},
             "measurement_noise": asdict(self.noise),
             "kalman": {**asdict(self.kalman), "prediction_model": "independent_random_walk",
                     "process_covariance": "diag(process_std**2) * dt",

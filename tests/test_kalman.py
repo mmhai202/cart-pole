@@ -100,7 +100,7 @@ class KalmanTests(unittest.TestCase):
                       {'process_std': [True, 1, 1, 1]}, {'process_std': [0, 1, 1, 1]},
                       {'process_std': [float('nan')]*4}):
             with self.subTest(value=value), self.assertRaises(ValueError):
-                kalman_settings({'kalman': value})
+                kalman_settings({'controller': {'kalman': value}})
 
 
 if __name__ == '__main__':

@@ -24,13 +24,8 @@ Each run saves CSV data, configuration, summary, and MP4 video in `results/`.
 
 Edit [config.json](config.json):
 
-- `duration_s`: simulation duration.
-- `controller`: control period, LQR Q/R weights, and optional disturbance observer.
-- `force_limit_N`, `actuator`: force limit and actuator response time.
-- `friction`: cart dry/viscous friction and pivot damping.
-- `measurement_noise`, `kalman`: sensor noise, random seed, and optional state filtering.
-- `initial`: initial position, velocity, angle, and angular velocity.
-- `force_push`: external pulses defined by `time_s`, `time_e`, and `force_N`.
+- `simulation`: duration, initial state, actuator, friction, measurement noise/seed, and external force pulses.
+- `controller`: control period, LQR Q/R weights, optional `kalman` filter and disturbance observer.
 
 For automatic Q/R tuning, see [optimization usage](scripts/USAGE.md).
 
