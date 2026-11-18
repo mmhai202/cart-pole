@@ -158,6 +158,7 @@ def build_scene(trial, force_limit, plant, recovery):
 
     actual = trial.get("actuator_force", np.append(trial["force"], trial["force"][-1]))
     commands = trial.get("command_force", trial["force"])
+    modes = trial.get("controller_mode")
     tau = trial.get("actuator_time_constant_s", 0.0)
     swing_up = trial.get("metrics", {}).get("swing_up_enabled", False)
     angles = wrap_angle(trial["state"][:, 2]) if swing_up else trial["state"][:, 2]
@@ -248,7 +249,6 @@ def build_scene(trial, force_limit, plant, recovery):
         length = arrow_scale * np.sign(push) * min(abs(push) / force_limit, 1.5)
         disturbance.set_positions((x, 0), (x + length, 0))
         clock.set_text(f"{t:05.2f} / {duration:g} s")
-        modes = trial.get("controller_mode")
         mode_label.set_text("LQR BALANCE" if modes is None or modes[force_index] else "SWING-UP")
         display_angle = np.rad2deg(wrap_angle(theta) if swing_up else theta)
         readouts[0].set_text(f"{display_angle:+.1f}°")

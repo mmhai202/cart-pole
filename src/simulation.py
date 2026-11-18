@@ -129,6 +129,18 @@ def simulate(initial, K, force_limit, plant=Plant(), dt=0.02, duration=10.0,
     observer = (DisturbanceObserver(plant, dt, measurement_noise.std, disturbance_observer)
                 if disturbance_observer.enabled else None)
     swing_controller = SwingUpController(plant, swing_up) if swing_up.enabled else None
+
+    def observe(controller_state, previous_command, balancing):
+        if observer is None:
+            return 0.0
+        if not balancing:
+            observer.reset()
+            return 0.0
+        observer_state = controller_state.copy()
+        if swing_controller is not None:
+            observer_state[2] = wrap_angle(observer_state[2])
+        return observer.update(observer_state, previous_command)
+
     modes = np.zeros(n, dtype=int)  # 0: swing-up, 1: LQR
     state[0] = initial
     peak_x = abs(initial[0])
@@ -147,15 +159,7 @@ def simulate(initial, K, force_limit, plant=Plant(), dt=0.02, duration=10.0,
         nominal_force[k] = (-gain @ estimated[k] if swing_controller is None
                             else swing_controller.command(estimated[k], gain))
         modes[k] = int(swing_controller is None or swing_controller.balancing)
-        if observer is not None:
-            if modes[k]:
-                observer_state = estimated[k].copy()
-                if swing_controller is not None:
-                    observer_state[2] = wrap_angle(observer_state[2])
-                estimated_disturbance[k] = observer.update(observer_state, command[k - 1] if k else 0.0)
-            else:
-                observer.previous_state = None
-                observer.force = 0.0
+        estimated_disturbance[k] = observe(estimated[k], command[k - 1] if k else 0.0, modes[k])
         requested[k] = (nominal_force[k] - disturbance_observer.compensation_gain
                         * estimated_disturbance[k])
         command[k] = np.clip(requested[k], -force_limit, force_limit)
@@ -177,11 +181,7 @@ def simulate(initial, K, force_limit, plant=Plant(), dt=0.02, duration=10.0,
             break
     measured[last] = state[last] + noise[last]
     estimated[last] = estimator.update(measured[last]) if estimator is not None else measured[last]
-    if observer is not None and modes[last - 1]:
-        observer_state = estimated[last].copy()
-        if swing_controller is not None:
-            observer_state[2] = wrap_angle(observer_state[2])
-        estimated_disturbance[last] = observer.update(observer_state, command[last - 1])
+    estimated_disturbance[last] = observe(estimated[last], command[last - 1], modes[last - 1])
     # Performance and physical safety use the true trajectory; noisy sensor
     # measurements (optionally filtered) feed the controller only.
     recovery_state = state[:last + 1].copy()

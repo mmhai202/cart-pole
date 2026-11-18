@@ -20,6 +20,13 @@ from simulation import Actuator, MeasurementNoise, Recovery, simulate
 
 
 class DisturbanceTests(unittest.TestCase):
+    def test_reset_discards_previous_disturbance_before_reseeding(self):
+        obs = DisturbanceObserver(Plant(), .02, np.zeros(4), DisturbanceObserverSettings(True))
+        obs.update(np.zeros(4))
+        self.assertNotEqual(obs.update([0, 1, 0, 0]), 0)
+        obs.reset()
+        self.assertEqual(obs.update([0, 0, 2 * np.pi, 0], 15), 0)
+
     def test_nominal_transition_has_zero_residual_despite_nonzero_command(self):
         obs = DisturbanceObserver(Plant(), .05, np.zeros(4), DisturbanceObserverSettings(True))
         state = np.array([.1, -.2, .02, .03])

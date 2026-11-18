@@ -26,9 +26,14 @@ class SwingUpSettings:
         if type(self.enabled) is not bool:
             raise ValueError("swing_up.enabled must be a boolean.")
         for name, value in asdict(self).items():
-            if name != "enabled" and (type(value) not in (int, float)
-                                      or not np.isfinite(value) or value <= 0):
-                raise ValueError(f"swing_up.{name} must be finite and positive.")
+            if name == "enabled":
+                continue
+            allow_zero = name in {"energy_gain", "position_gain", "velocity_gain",
+                                  "kick_acceleration_m_s2"}
+            if (type(value) not in (int, float) or not np.isfinite(value)
+                    or value < 0 or (value == 0 and not allow_zero)):
+                bound = "nonnegative" if allow_zero else "positive"
+                raise ValueError(f"swing_up.{name} must be finite and {bound}.")
         if not self.capture_angle_deg < self.release_angle_deg < 90:
             raise ValueError("swing_up angles must satisfy capture < release < 90 degrees.")
 

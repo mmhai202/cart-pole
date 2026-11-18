@@ -48,6 +48,10 @@ class DisturbanceObserver:
         self.projection = (weighted_input.T / (self.Bd.T @ weighted_input).item()).ravel()
         self.alpha = -np.expm1(-dt / settings.filter_time_constant_s)
         self.settings = settings
+        self.reset()
+
+    def reset(self):
+        """Clear the estimate and discard the previous transition."""
         self.previous_state = None
         self.force = 0.0
 

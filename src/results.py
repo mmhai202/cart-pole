@@ -25,12 +25,15 @@ def save_trial(path, trial):
     def interval(key):
         return np.append(trial[key], np.nan)
 
+    modes = trial.get("controller_mode")
+    if modes is None:
+        modes = np.ones(len(trial["time"]) - 1, dtype=int)
     data = np.column_stack((
         trial["time"], trial["state"], trial["actuator_force"],
         interval("requested_force"), interval("disturbance"), interval("command_force"),
         trial["measured_state"], trial["cart_friction_force"], trial["estimated_state"],
         trial["estimated_disturbance"], interval("nominal_force"),
-        np.append(trial.get("controller_mode", np.ones(len(trial["time"]) - 1)), np.nan),
+        np.append(modes, np.nan),
     ))
     np.savetxt(path, data, delimiter=",", header=",".join(CSV_COLUMNS), comments="")
 

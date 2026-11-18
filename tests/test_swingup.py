@@ -1,6 +1,5 @@
 """Hybrid control, nonlinear energy injection and a complete noisy swing-up."""
 
-from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import json
@@ -61,9 +60,18 @@ class SwingUpTests(unittest.TestCase):
 
     def test_invalid_settings(self):
         for changes in ({"enabled": 1}, {"energy_gain": -1}, {"position_gain": float('nan')},
+                        {"acceleration_limit_m_s2": 0}, {"capture_angle_deg": 0},
+                        {"capture_angular_velocity_rad_s": 0},
                         {"capture_angle_deg": 40}, {"release_angle_deg": 90}):
             with self.subTest(changes=changes), self.assertRaises(ValueError):
                 SwingUpSettings(**changes)
+
+    def test_zero_gains_and_kick_disable_energy_shaping(self):
+        controller = SwingUpController(
+            Plant(), SwingUpSettings(enabled=True, energy_gain=0, position_gain=0,
+                                    velocity_gain=0, kick_acceleration_m_s2=0))
+        self.assertAlmostEqual(controller.command([0, 0, np.pi, 0], np.zeros(4)), 0)
+        self.assertFalse(controller.balancing)
 
     def test_linear_observer_is_inactive_during_swing_up(self):
         trial = simulate([0, 0, np.pi, 0], design_lqr()["K"], 15, duration=1,
@@ -74,10 +82,22 @@ class SwingUpTests(unittest.TestCase):
         assert_allclose(trial['nominal_force'], trial['requested_force'])
 
     def test_reference_swing_up_recovers_with_noise_lag_and_friction(self):
-        config = load_config(Path(__file__).resolve().parents[1] / 'config.json')
-        # Keep the successful reference trajectory independent of live Q/R tuning.
-        config['controller']['dt'] = 0.05
-        config['controller']['lqr'] = {'q': [30, 10, 300, 10], 'r': 1.0}
+        # Fixed unforced reference, independent of the tunable example config.
+        config = {
+            'simulation': {
+                'duration_s': 10,
+                'initial': {'position_m': 0, 'velocity_m_s': 0, 'angle_deg': 180,
+                            'angular_velocity_deg_s': 0},
+                'friction': {'cart_static_force_N': .3, 'cart_sliding_force_N': .2},
+                'measurement_noise': {'position_std_m': .001, 'velocity_std_m_s': .01,
+                                      'angle_std_deg': .1, 'angular_velocity_std_deg_s': 1,
+                                      'seed': 42},
+                'actuator': {'force_limit_N': 15, 'response_time_constant_s': .05},
+                'force_push': [],
+            },
+            'controller': {'dt': .05, 'lqr': {'q': [30, 10, 300, 10], 'r': 1.0},
+                           'kalman': {'enabled': True}, 'swing_up': {'enabled': True}},
+        }
         experiment = Experiment(config)
         assert_allclose(experiment.initial, [0, 0, np.pi, 0])
         design = design_lqr(experiment.plant, experiment.dt, q=experiment.q, r=experiment.r)
@@ -101,6 +121,24 @@ class SwingUpTests(unittest.TestCase):
             loaded, *_ = load_results(output)
             assert_array_equal(loaded['controller_mode'], trial['controller_mode'])
             assert_allclose(loaded['state'], trial['state'])
+
+    def test_default_50hz_experiment_recovers_with_configured_push(self):
+        experiment = Experiment(load_config(Path(__file__).resolve().parents[1] / 'config.json'))
+        self.assertEqual(experiment.dt, .02)
+        self.assertTrue(experiment.pushes)
+        design = design_lqr(experiment.plant, experiment.dt, q=experiment.q, r=experiment.r)
+        trial = simulate(experiment.initial, design['K'], experiment.limit, experiment.plant,
+                         experiment.dt, experiment.duration, experiment.substeps, experiment.recovery,
+                         force_push=experiment.pushes, actuator=experiment.actuator,
+                         measurement_noise=experiment.noise, kalman=experiment.kalman,
+                         disturbance_observer=experiment.observer, swing_up=experiment.swing_up)
+        self.assertTrue(trial['metrics']['success'])
+        self.assertTrue(trial['metrics']['rail_safe'])
+        self.assertLess(trial['metrics']['first_balance_time_s'], experiment.pushes[0][0])
+        for start, width, force in experiment.pushes:
+            first = round(start / experiment.dt)
+            end = first + round(width / experiment.dt)
+            assert_allclose(trial['disturbance'][first:end], force)
 
 
 if __name__ == '__main__':
