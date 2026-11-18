@@ -7,6 +7,7 @@ from functools import lru_cache
 import numpy as np
 
 from cartpole import design_lqr
+from cartpole.swingup import wrap_angle
 from experiment import Experiment
 from simulation import sample_count, simulate, validate_run
 
@@ -35,7 +36,9 @@ class Scenario(Experiment):
 
 def performance_cost(trial, scenario):
     """Fixed, bounded cost independent of the Q/R being searched."""
-    state = trial["state"]
+    state = trial["state"].copy()
+    if scenario.swing_up.enabled:
+        state[:, 2] = wrap_angle(state[:, 2])
     times = trial["time"]
     if not np.all(np.isfinite(state)):
         raise FloatingPointError("Non-finite simulated state.")
@@ -77,7 +80,7 @@ def evaluate(scenarios, q, r, seeds):
                                  scenario.dt, scenario.duration, scenario.substeps, scenario.recovery,
                                  force_push=scenario.pushes, actuator=scenario.actuator,
                                  measurement_noise=replace(scenario.noise, seed=seed), kalman=scenario.kalman,
-                                 disturbance_observer=scenario.observer)
+                                 disturbance_observer=scenario.observer, swing_up=scenario.swing_up)
                 entry.update(trial["metrics"])
                 entry["performance_cost"] = performance_cost(trial, scenario)
             except SIMULATION_ERRORS as error:

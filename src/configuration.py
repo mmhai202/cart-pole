@@ -9,6 +9,7 @@ import numpy as np
 from cartpole import Plant
 from cartpole.disturbance import DisturbanceObserverSettings
 from cartpole.kalman import KalmanSettings
+from cartpole.swingup import SwingUpSettings
 from simulation import Actuator, MeasurementNoise
 
 
@@ -29,7 +30,7 @@ def _settings(values, name, cls):
 
 def _controller_section(config):
     return _section(config.get("controller", {}), "controller",
-                    {"dt", "lqr", "kalman", "disturbance_observer"})
+                    {"dt", "lqr", "kalman", "disturbance_observer", "swing_up"})
 
 
 def _simulation_section(config):
@@ -46,7 +47,7 @@ def experiment_settings(config):
 
     controller = _controller_section(config)
     lqr = _section(controller.get("lqr", {}), "controller.lqr", {"q", "r"})
-    dt = positive(controller.get("dt", 0.05), "controller.dt")
+    dt = positive(controller.get("dt", 0.02), "controller.dt")
     q = lqr.get("q", [100, 5, 300, 5])
     if not isinstance(q, list) or len(q) != 4:
         raise ValueError("controller.lqr.q must contain four positive finite numbers.")
@@ -88,6 +89,7 @@ def load_config(path):
     physical_settings(config)
     kalman_settings(config)
     observer_settings(config)
+    swing_up_settings(config)
     plant_settings(config)
     return config
 
@@ -130,3 +132,9 @@ def physical_settings(config):
     return (Actuator(response_time_constant_s=actuator.get("response_time_constant_s", 0.0)),
             _settings(simulation.get("measurement_noise", {}),
                       "simulation.measurement_noise", MeasurementNoise))
+
+
+def swing_up_settings(config):
+    """Read optional energy-shaping controller settings."""
+    return _settings(_controller_section(config).get("swing_up", {}),
+                     "controller.swing_up", SwingUpSettings)

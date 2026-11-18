@@ -16,6 +16,7 @@ CSV_COLUMNS = (
     "measured_x_m", "measured_velocity_m_s", "measured_theta_rad", "measured_omega_rad_s",
     "cart_friction_force_N", "estimated_x_m", "estimated_velocity_m_s",
     "estimated_theta_rad", "estimated_omega_rad_s", "estimated_disturbance_N", "nominal_force_N",
+    "balance_mode",
 )
 
 
@@ -29,6 +30,7 @@ def save_trial(path, trial):
         interval("requested_force"), interval("disturbance"), interval("command_force"),
         trial["measured_state"], trial["cart_friction_force"], trial["estimated_state"],
         trial["estimated_disturbance"], interval("nominal_force"),
+        np.append(trial.get("controller_mode", np.ones(len(trial["time"]) - 1)), np.nan),
     ))
     np.savetxt(path, data, delimiter=",", header=",".join(CSV_COLUMNS), comments="")
 
@@ -50,6 +52,7 @@ def load_results(source):
     trial["estimated_state"] = data[:, 14:18] if data.shape[1] >= 18 else trial["measured_state"].copy()
     trial["estimated_disturbance"] = data[:, 18] if data.shape[1] >= 19 else np.zeros(len(data))
     trial["nominal_force"] = data[:-1, 19] if data.shape[1] >= 20 else trial["requested_force"].copy()
+    trial["controller_mode"] = data[:-1, 20].astype(int) if data.shape[1] >= 21 else np.ones(len(data) - 1, dtype=int)
     trial["actuator_time_constant_s"] = summary.get("actuator", {}).get("response_time_constant_s", 0.0)
     if data.shape[1] >= 14:
         trial["cart_friction_force"] = data[:, 13]

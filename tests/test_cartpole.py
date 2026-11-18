@@ -84,10 +84,10 @@ class CartPoleTests(unittest.TestCase):
 
     def test_push_is_external_to_actuator_saturation(self):
         result = simulate(np.zeros(4), self.K, 5.0, force_push=[(2.0, 0.1, 20.0)])
-        assert_allclose(result["state"][:41], 0, atol=1e-14)
-        self.assertEqual(np.count_nonzero(result["disturbance"]), 2)
-        self.assertAlmostEqual(np.sum(result["disturbance"]) * 0.05, 2.0)
-        self.assertGreater(result["state"][41, 1], 0)
+        assert_allclose(result["state"][:101], 0, atol=1e-14)
+        self.assertEqual(np.count_nonzero(result["disturbance"]), 5)
+        self.assertAlmostEqual(np.sum(result["disturbance"]) * 0.02, 2.0)
+        self.assertGreater(result["state"][101, 1], 0)
         self.assertLessEqual(np.max(np.abs(result["force"])), 5.0)
         self.assertFalse(result["metrics"]["success"])
         stronger = simulate(np.zeros(4), self.K, 15.0, force_push=[(2.0, 0.1, 20.0)])
@@ -96,7 +96,7 @@ class CartPoleTests(unittest.TestCase):
     def test_multiple_overlapping_pushes_sum_and_drive_the_plant(self):
         pulses = [(0.1, 0.1, -3.0), (0.05, 0.1, 5.0)]
         result = simulate(np.zeros(4), np.zeros((1, 4)), 1.0,
-                          duration=0.2, recovery=Recovery(dwell=0.05), force_push=pulses)
+                          dt=0.05, duration=0.2, recovery=Recovery(dwell=0.05), force_push=pulses)
         expected = np.array([0, 5, 2, -3])
         assert_array_equal(result["disturbance"], expected)
         assert_array_equal(result["force"], 0)
@@ -229,7 +229,7 @@ class ActuatorNoiseTests(unittest.TestCase):
                 self.assertAlmostEqual(force, command * (1 - np.exp(-dt / tau)), places=12)
 
     def test_motor_starts_at_zero_tracks_command_and_respects_force_limit(self):
-        dt, tau = 0.05, 0.05
+        dt, tau = 0.02, 0.05
         trial = simulate([0, 0, np.deg2rad(5), 0], design_lqr()["K"], 5,
                          actuator=Actuator(tau), duration=1)
         self.assertEqual(trial["actuator_force"][0], 0)
@@ -268,8 +268,8 @@ class ActuatorNoiseTests(unittest.TestCase):
         self.assertEqual(trial["metrics"]["peak_abs_x_m"], 0)
 
     def test_settling_time_ignores_out_of_bounds_measurement_when_true_state_is_settled(self):
-        samples = np.zeros((41, 4))
-        samples[10, 0] = 2  # Measured x=0.1 m at t=0.5 s; true state stays zero.
+        samples = np.zeros((101, 4))
+        samples[25, 0] = 2  # Measured x=0.1 m at t=0.5 s; true state stays zero.
         with patch("simulation.np.random.default_rng") as rng:
             rng.return_value.normal.return_value = samples
             trial = simulate(np.zeros(4), np.zeros((1, 4)), 15, duration=2,
@@ -321,15 +321,15 @@ class CommandLineTests(unittest.TestCase):
         self.assertEqual(summary["initial_velocity_m_s"], 0)
         self.assertEqual(summary["force_push"], [])
         self.assertEqual(summary["duration_s"], 10)
-        self.assertEqual(summary["dt_s"], 0.05)
-        self.assertEqual(summary["integration_substeps"], 25)
+        self.assertEqual(summary["dt_s"], 0.02)
+        self.assertEqual(summary["integration_substeps"], 10)
         self.assertFalse(summary["kalman"]["enabled"])
         self.assertEqual(summary["trial"]["controller_state_source"], "measured")
-        assert_allclose(summary["design"]["K"], design_lqr(dt=0.05)["K"])
+        assert_allclose(summary["design"]["K"], design_lqr(dt=0.02)["K"])
         self.assertEqual(set(summary["config"]), {"simulation"})
         trial, limit, _, _ = load_results(self.output)
         self.assertEqual(limit, 15)
-        assert_allclose(np.diff(trial["time"]), 0.05, atol=1e-12)
+        assert_allclose(np.diff(trial["time"]), 0.02, atol=1e-12)
         self.assertAlmostEqual(np.rad2deg(trial["state"][0, 2]), 5)
         np.testing.assert_array_equal(trial["disturbance"], 0)
         self.assertTrue(trial["metrics"]["success"])
@@ -392,7 +392,7 @@ class CommandLineTests(unittest.TestCase):
         self.config["controller"] = {"lqr": {"r": 0.1}}
         summary = self.run_cli()
         assert_allclose(summary["design"]["K"], design_lqr(r=0.1)["K"])
-        self.assertEqual(summary["dt_s"], 0.05)
+        self.assertEqual(summary["dt_s"], 0.02)
         self.assertEqual(json.loads((self.output / "config.json").read_text()), self.config)
 
     def test_motor_and_measurements_round_trip_through_csv_and_summary(self):
@@ -568,25 +568,25 @@ class CommandLineTests(unittest.TestCase):
         self.assertEqual(summary["config"], self.config)
         trial, limit, _, _ = load_results(self.output)
         self.assertEqual(limit, 15)
-        np.testing.assert_allclose(trial["state"][:21], 0, atol=1e-14)
-        np.testing.assert_array_equal(np.flatnonzero(trial["disturbance"]), np.arange(20, 22))
-        self.assertEqual(trial["disturbance"][20], 20)
+        np.testing.assert_allclose(trial["state"][:51], 0, atol=1e-14)
+        np.testing.assert_array_equal(np.flatnonzero(trial["disturbance"]), np.arange(50, 55))
+        self.assertEqual(trial["disturbance"][50], 20)
         self.assertTrue(trial["metrics"]["success"])
         self.assertTrue((self.output / "simulation.csv").is_file())
 
     def test_multiple_pushes_from_json_reach_csv_summary_and_video(self):
         self.simulation["initial"]["angle_deg"] = 0
         self.simulation["force_push"] = [
-            {"force_N": -4, "time_s": 5, "time_e": 5.15},
-            {"force_N": 10, "time_s": 2, "time_e": 2.25},
-            {"force_N": -3, "time_s": 2.05, "time_e": 2.2},
+            {"force_N": -4, "time_s": 5, "time_e": 5.16},
+            {"force_N": 10, "time_s": 2, "time_e": 2.26},
+            {"force_N": -3, "time_s": 2.06, "time_e": 2.2},
         ]
         summary = self.run_cli()
         trial, _, _, _ = load_results(self.output)
-        expected = np.zeros(200)
-        expected[100:103] -= 4
-        expected[40:45] += 10
-        expected[41:44] -= 3
+        expected = np.zeros(500)
+        expected[250:258] -= 4
+        expected[100:113] += 10
+        expected[103:110] -= 3
         assert_array_equal(trial["disturbance"], expected)
         assert_array_equal(self.export.call_args.args[0]["disturbance"], expected)
         self.assertEqual(summary["config"], self.config)
@@ -604,17 +604,17 @@ class CommandLineTests(unittest.TestCase):
 
         self.simulation["duration_s"] = 2
         self.simulation["initial"]["angle_deg"] = 0
-        for end in (1.05, 1.25, 2):
+        for end in (1.06, 1.26, 2):
             with self.subTest(time_e=end):
                 self.simulation["force_push"] = [{"force_N": 1, "time_s": 1, "time_e": end}]
                 summary = self.run_cli()
                 trial, limit, plant, recovery = load_results(self.output)
-                steps = round((end - 1) / 0.05)
+                steps = round((end - 1) / 0.02)
                 assert_array_equal(np.flatnonzero(trial["disturbance"]),
-                                   np.arange(20, 20 + steps))
-                self.assertAlmostEqual(np.sum(trial["disturbance"]) * 0.05, end - 1)
-                assert_allclose(trial["state"][:21], 0, atol=1e-14)
-                self.assertGreater(trial["state"][21, 1], 0)
+                                   np.arange(50, 50 + steps))
+                self.assertAlmostEqual(np.sum(trial["disturbance"]) * 0.02, end - 1)
+                assert_allclose(trial["state"][:51], 0, atol=1e-14)
+                self.assertGreater(trial["state"][51, 1], 0)
                 self.assertEqual(summary["config"]["simulation"]["force_push"][0]["time_e"], end)
                 self.assertAlmostEqual(summary["force_push"][0]["duration_s"], end - 1)
                 fig, update, _ = build_scene(trial, limit, plant, recovery)
@@ -623,7 +623,7 @@ class CommandLineTests(unittest.TestCase):
                                  if isinstance(patch, FancyArrowPatch))
                     update(1)
                     self.assertTrue(arrow.get_visible())
-                    update(end - 0.05)
+                    update(end - 0.02)
                     self.assertTrue(arrow.get_visible())
                     update(end)
                     self.assertFalse(arrow.get_visible())
@@ -641,8 +641,8 @@ class CommandLineTests(unittest.TestCase):
                 trial, _, _, _ = load_results(self.output)
                 self.assertEqual(summary["duration_s"], duration)
                 self.assertEqual(trial["time"][-1], duration)
-                self.assertEqual(len(trial["time"]), duration * 20 + 1)
-                assert_array_equal(trial["disturbance"][-2:], 1)
+                self.assertEqual(len(trial["time"]), duration * 50 + 1)
+                assert_array_equal(trial["disturbance"][-5:], 1)
                 self.assertEqual(self.export.call_args.args[0]["time"][-1], duration)
 
     def test_all_initial_states_preserve_signed_velocities_and_units(self):
@@ -788,7 +788,7 @@ class VideoRenderingTests(unittest.TestCase):
 
         plant, recovery = Plant(), Recovery(dwell=0.05)
         trial = simulate([0, 0, np.deg2rad(5), 0], design_lqr(plant)["K"], 15,
-                         duration=0.2, recovery=recovery, force_push=[(0.05, 0.1, 5)],
+                         dt=0.05, duration=0.2, recovery=recovery, force_push=[(0.05, 0.1, 5)],
                          actuator=Actuator(0.05), measurement_noise=MeasurementNoise(angle_std_deg=0.1))
         fig, update, _ = build_scene(trial, 15, plant, recovery)
         self.addCleanup(plt.close, fig)

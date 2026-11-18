@@ -6,7 +6,7 @@ import numpy as np
 
 from configuration import (
     experiment_settings, kalman_settings, observer_settings, physical_settings,
-    plant_settings,
+    plant_settings, swing_up_settings,
 )
 from simulation import Recovery
 
@@ -19,6 +19,7 @@ class Experiment:
         self.dt, self.q, self.r = experiment_settings(config)
         self.kalman = kalman_settings(config)
         self.observer = observer_settings(config)
+        self.swing_up = swing_up_settings(config)
         self.plant = plant_settings(config)
         self.actuator, self.noise = physical_settings(config)
         simulation = config["simulation"]
@@ -46,6 +47,7 @@ class Experiment:
                     "process_covariance": "diag(process_std**2) * dt",
                     "measurement_covariance": "diag(measurement_noise.std**2)",
                     "initialization": "first_measurement"},
+            "swing_up": asdict(self.swing_up),
             "lqr_friction_model": "viscous_only",
             "lqr_state_order": ["position", "velocity", "angle", "angular_velocity"],
             "disturbance_observer": {**asdict(self.observer),

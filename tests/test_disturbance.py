@@ -53,10 +53,10 @@ class DisturbanceTests(unittest.TestCase):
                     kalman=KalmanSettings(True), disturbance_observer=DisturbanceObserverSettings(True))
         plain = simulate(**args)
         pushed = simulate(**args, force_push=[(.5, .1, 2)])
-        assert_array_equal(plain["estimated_disturbance"][:11], pushed["estimated_disturbance"][:11])
-        assert_array_equal(plain["command_force"][:11], pushed["command_force"][:11])
-        self.assertFalse(np.array_equal(plain["estimated_disturbance"][11:],
-                                       pushed["estimated_disturbance"][11:]))
+        assert_array_equal(plain["estimated_disturbance"][:26], pushed["estimated_disturbance"][:26])
+        assert_array_equal(plain["command_force"][:26], pushed["command_force"][:26])
+        self.assertFalse(np.array_equal(plain["estimated_disturbance"][26:],
+                                       pushed["estimated_disturbance"][26:]))
         assert_allclose(pushed["nominal_force"], -pushed["estimated_state"][:-1] @ K.ravel())
         assert_allclose(pushed["requested_force"],
                         pushed["nominal_force"] - .5 * pushed["estimated_disturbance"][:-1])

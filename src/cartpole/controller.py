@@ -9,7 +9,7 @@ from scipy.signal import cont2discrete
 from .model import Plant, linearize
 
 
-def design_lqr(plant=Plant(), dt=0.05, q=(100.0, 5.0, 300.0, 5.0), r=0.03):
+def design_lqr(plant=Plant(), dt=0.02, q=(100.0, 5.0, 300.0, 5.0), r=0.03):
     """Exact zero-order-hold discretization followed by the discrete DARE."""
     if not np.isfinite(dt) or dt <= 0:
         raise ValueError("Sample period must be finite and positive.")

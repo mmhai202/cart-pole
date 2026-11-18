@@ -11,6 +11,7 @@ from cartpole.integration import advance, advance_actuator
 from cartpole.kalman import KalmanSettings, KalmanFilter
 from cartpole.disturbance import DisturbanceObserver, DisturbanceObserverSettings
 from cartpole.model import cart_friction_force
+from cartpole.swingup import SwingUpController, SwingUpSettings, wrap_angle
 
 
 @dataclass(frozen=True)
@@ -82,10 +83,10 @@ def validate_run(duration, dt, substeps, force_limit, recovery):
     return n
 
 
-def simulate(initial, K, force_limit, plant=Plant(), dt=0.05, duration=10.0,
+def simulate(initial, K, force_limit, plant=Plant(), dt=0.02, duration=10.0,
              substeps=25, recovery=Recovery(), force_push=(),
              actuator=Actuator(), measurement_noise=MeasurementNoise(), kalman=KalmanSettings(),
-             disturbance_observer=DisturbanceObserverSettings()):
+             disturbance_observer=DisturbanceObserverSettings(), swing_up=SwingUpSettings()):
     """Simulate the nonlinear plant until horizon or first detected rail violation.
 
     force_push contains external rectangular pulses (start, width, force).
@@ -127,6 +128,8 @@ def simulate(initial, K, force_limit, plant=Plant(), dt=0.05, duration=10.0,
         raise ValueError("LQR gain must contain four finite numbers.")
     observer = (DisturbanceObserver(plant, dt, measurement_noise.std, disturbance_observer)
                 if disturbance_observer.enabled else None)
+    swing_controller = SwingUpController(plant, swing_up) if swing_up.enabled else None
+    modes = np.zeros(n, dtype=int)  # 0: swing-up, 1: LQR
     state[0] = initial
     peak_x = abs(initial[0])
     safe = True
@@ -141,9 +144,18 @@ def simulate(initial, K, force_limit, plant=Plant(), dt=0.05, duration=10.0,
                 estimated[k] = estimator.update(measured[k])
         else:
             estimated[k] = measured[k]
-        nominal_force[k] = -gain @ estimated[k]
+        nominal_force[k] = (-gain @ estimated[k] if swing_controller is None
+                            else swing_controller.command(estimated[k], gain))
+        modes[k] = int(swing_controller is None or swing_controller.balancing)
         if observer is not None:
-            estimated_disturbance[k] = observer.update(estimated[k], command[k - 1] if k else 0.0)
+            if modes[k]:
+                observer_state = estimated[k].copy()
+                if swing_controller is not None:
+                    observer_state[2] = wrap_angle(observer_state[2])
+                estimated_disturbance[k] = observer.update(observer_state, command[k - 1] if k else 0.0)
+            else:
+                observer.previous_state = None
+                observer.force = 0.0
         requested[k] = (nominal_force[k] - disturbance_observer.compensation_gain
                         * estimated_disturbance[k])
         command[k] = np.clip(requested[k], -force_limit, force_limit)
@@ -165,11 +177,17 @@ def simulate(initial, K, force_limit, plant=Plant(), dt=0.05, duration=10.0,
             break
     measured[last] = state[last] + noise[last]
     estimated[last] = estimator.update(measured[last]) if estimator is not None else measured[last]
-    if observer is not None:
-        estimated_disturbance[last] = observer.update(estimated[last], command[last - 1])
+    if observer is not None and modes[last - 1]:
+        observer_state = estimated[last].copy()
+        if swing_controller is not None:
+            observer_state[2] = wrap_angle(observer_state[2])
+        estimated_disturbance[last] = observer.update(observer_state, command[last - 1])
     # Performance and physical safety use the true trajectory; noisy sensor
     # measurements (optionally filtered) feed the controller only.
-    near = np.all(np.abs(state[:last + 1]) <= recovery.bounds, axis=1)
+    recovery_state = state[:last + 1].copy()
+    if swing_controller is not None:
+        recovery_state[:, 2] = wrap_angle(recovery_state[:, 2])
+    near = np.all(np.abs(recovery_state) <= recovery.bounds, axis=1)
     tail = time[:last + 1] >= duration - recovery.dwell - 1e-10
     success = bool(safe and np.all(near[tail]))
     settling_time = None
@@ -180,13 +198,17 @@ def simulate(initial, K, force_limit, plant=Plant(), dt=0.05, duration=10.0,
                "controller_state_source": "kalman" if kalman.enabled else "measured",
                "disturbance_compensation_enabled": disturbance_observer.enabled,
                "rail_safe": safe, "peak_abs_x_m": float(peak_x),
-               "peak_abs_theta_deg": float(np.rad2deg(np.max(np.abs(state[:last + 1, 2])))),
+               "peak_abs_theta_deg": float(np.rad2deg(np.max(np.abs(recovery_state[:, 2])))),
                "settling_time_s": settling_time,
                "saturation_fraction": float(np.mean(np.abs(requested[:last]) > force_limit)),
                "end_time_s": float(time[last])}
+    if swing_controller is not None:
+        captures = np.flatnonzero(modes[:last])
+        metrics["swing_up_enabled"] = True
+        metrics["first_balance_time_s"] = float(time[captures[0]]) if len(captures) else None
     friction = cart_friction_force(state[:last + 1], actual[:last + 1]
                                    + np.append(disturbance[:last], 0), plant)
-    return {"time": time[:last + 1], "state": state[:last + 1], "force": applied[:last],
+    return {"controller_mode": modes[:last], "time": time[:last + 1], "state": state[:last + 1], "force": applied[:last],
             "actuator_force": actual[:last + 1], "command_force": command[:last],
             "estimated_state": estimated[:last + 1],
             "estimated_disturbance": estimated_disturbance[:last + 1],

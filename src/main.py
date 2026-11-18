@@ -61,7 +61,12 @@ def print_report(config_path, experiment, design, trial):
     if observer.enabled:
         print(f"  Disturbance   Residual observer; filter={observer.filter_time_constant_s:g} s, "
               f"compensation={observer.compensation_gain:g}")
+    if experiment.swing_up.enabled:
+        print("  Swing-up      Energy shaping with hysteretic LQR capture")
     print("\nRESULTS")
+    if experiment.swing_up.enabled:
+        capture = metrics["first_balance_time_s"]
+        print(f"  LQR capture   {f'{capture:.2f} s' if capture is not None else 'Not captured'}")
     print(f"  Recovery      {'SUCCESS' if metrics['success'] else 'FAILED'}")
     print(f"  Rail safety   {'SAFE' if metrics['rail_safe'] else 'LIMIT EXCEEDED'}")
     print(f"  Peak position {metrics['peak_abs_x_m']:.3f} m")
@@ -88,7 +93,7 @@ def main(argv=None):
             experiment.dt, experiment.duration, experiment.substeps, experiment.recovery,
             force_push=experiment.pushes, actuator=experiment.actuator,
             measurement_noise=experiment.noise, kalman=experiment.kalman,
-            disturbance_observer=experiment.observer,
+            disturbance_observer=experiment.observer, swing_up=experiment.swing_up,
         )
     except (OSError, ValueError) as error:
         parser.error(str(error))

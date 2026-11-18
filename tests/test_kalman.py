@@ -60,7 +60,7 @@ class KalmanTests(unittest.TestCase):
                     measurement_noise=noise, kalman=KalmanSettings(True))
         trial = simulate(**args)
         pushed = simulate(**args, force_push=[(.5, .1, 5)])
-        assert_array_equal(trial['estimated_state'][:11], pushed['estimated_state'][:11])
+        assert_array_equal(trial['estimated_state'][:26], pushed['estimated_state'][:26])
         assert_array_equal(trial['estimated_state'][0], trial['measured_state'][0])
         self.assertFalse(np.array_equal(trial['estimated_state'][0], trial['state'][0]))
         assert_allclose(trial['requested_force'], -trial['estimated_state'][:-1] @ K.ravel())

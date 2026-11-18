@@ -15,6 +15,7 @@ from time import monotonic
 import numpy as np
 
 from results import load_results
+from cartpole.swingup import wrap_angle
 
 
 class _VideoProgress:
@@ -107,6 +108,7 @@ def build_scene(trial, force_limit, plant, recovery):
 
     card(0.569, 0.309)
     text(0.078, 0.849, "SIMULATION", fontsize=11, color=muted, weight="bold")
+    mode_label = text(0.34, 0.849, "", fontsize=11, color=green, weight="bold")
     clock = text(0.922, 0.849, "", fontsize=16, ha="right", family="DejaVu Sans Mono")
     world = add_axes([0.078, 0.605, 0.844, 0.22], facecolor=panel)
     # Keep both rail ends visible with a fixed camera throughout the run.
@@ -157,7 +159,9 @@ def build_scene(trial, force_limit, plant, recovery):
     actual = trial.get("actuator_force", np.append(trial["force"], trial["force"][-1]))
     commands = trial.get("command_force", trial["force"])
     tau = trial.get("actuator_time_constant_s", 0.0)
-    values = [np.rad2deg(trial["state"][:, 2]), trial["state"][:, 0], actual]
+    swing_up = trial.get("metrics", {}).get("swing_up_enabled", False)
+    angles = wrap_angle(trial["state"][:, 2]) if swing_up else trial["state"][:, 2]
+    values = [np.rad2deg(angles), trial["state"][:, 0], actual]
     labels = ["POLE ANGLE", "CART POSITION", "ACTUATOR FORCE"]
     colors = [violet, green, blue]
     positions = [0.395, 0.225, 0.055]
@@ -244,7 +248,10 @@ def build_scene(trial, force_limit, plant, recovery):
         length = arrow_scale * np.sign(push) * min(abs(push) / force_limit, 1.5)
         disturbance.set_positions((x, 0), (x + length, 0))
         clock.set_text(f"{t:05.2f} / {duration:g} s")
-        readouts[0].set_text(f"{np.rad2deg(theta):+.1f}°")
+        modes = trial.get("controller_mode")
+        mode_label.set_text("LQR BALANCE" if modes is None or modes[force_index] else "SWING-UP")
+        display_angle = np.rad2deg(wrap_angle(theta) if swing_up else theta)
+        readouts[0].set_text(f"{display_angle:+.1f}°")
         readouts[1].set_text(f"{x:+.3f} m")
         readouts[2].set_text(f"{force:+.1f} N")
         for row, (trace, marker, cursor) in enumerate(zip(traces, markers, cursors)):
@@ -259,13 +266,13 @@ def build_scene(trial, force_limit, plant, recovery):
                 py = np.append(trial["disturbance"][:end], push)
                 push_trace.set_data(tx, py)
             else:
-                current = np.rad2deg(theta) if row == 0 else x
+                current = display_angle if row == 0 else x
                 trace.set_data(np.append(times[:index + 1], t),
                                np.append(values[row][:index + 1], current))
                 marker.set_data([t], [current])
 
         return (cart, *wheels, rod, pivot, bob, disturbance, force_origin,
-                clock, *readouts, *traces, *markers, *cursors, push_trace, command_trace)
+                clock, mode_label, *readouts, *traces, *markers, *cursors, push_trace, command_trace)
 
     update(0)
     return fig, update, duration

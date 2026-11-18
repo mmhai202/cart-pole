@@ -2,9 +2,9 @@
   "simulation": {
     "duration_s": 10,
     "initial": {
-      "position_m": 0.5,
+      "position_m": 0,
       "velocity_m_s": 0,
-      "angle_deg": 5,
+      "angle_deg": 180,
       "angular_velocity_deg_s": 0
     },
     "friction": {
@@ -22,9 +22,9 @@
     },
     "force_push": [
       {
-        "time_s": 3,
+        "time_s": 4,
         "time_e": 6,
-        "force_N": 8
+        "force_N": 5
       }
     ],
     "actuator": {
@@ -33,15 +33,15 @@
     }
   },
   "controller": {
-    "dt": 0.05,
+    "dt": 0.02,
     "lqr": {
       "q": [
-        127.97717414717475,
-        130.42069174345198,
-        4.813765340321517,
-        429.3749323967405
+        1747.6800130134902,
+        451.52450330899046,
+        0.4771525857751806,
+        4625.302534850086
       ],
-      "r": 0.0029221544695955046
+      "r": 0.0005224093150413648
     },
     "kalman": {
       "enabled": true,
@@ -53,10 +53,16 @@
       ]
     },
     "disturbance_observer": {
-      "enabled": true,
+      "enabled": false,
       "filter_time_constant_s": 0.1,
       "compensation_gain": 0.5,
       "estimate_limit_N": 30.0
+    },
+    "swing_up": {
+      "enabled": true,
+      "energy_gain": 6.0,
+      "position_gain": 4.0,
+      "velocity_gain": 2.0
     }
   }
 }
