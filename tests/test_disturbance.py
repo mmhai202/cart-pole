@@ -12,7 +12,7 @@ from numpy.testing import assert_allclose, assert_array_equal
 
 from cartpole import Plant, design_lqr
 from cartpole.disturbance import DisturbanceObserver, DisturbanceObserverSettings
-from cartpole.kalman import KalmanSettings
+from cartpole.ekf import EKFSettings
 from configuration import observer_settings
 from results import save_trial
 from results import load_results
@@ -57,7 +57,7 @@ class DisturbanceTests(unittest.TestCase):
         K = design_lqr()["K"]
         args = dict(initial=[0, 0, .01, 0], K=K, force_limit=15, duration=1,
                     actuator=Actuator(.05), measurement_noise=MeasurementNoise(.001, .01, .1, 1),
-                    kalman=KalmanSettings(True), disturbance_observer=DisturbanceObserverSettings(True))
+                    ekf=EKFSettings(True), disturbance_observer=DisturbanceObserverSettings(True))
         plain = simulate(**args)
         pushed = simulate(**args, force_push=[(.5, .1, 2)])
         assert_array_equal(plain["estimated_disturbance"][:26], pushed["estimated_disturbance"][:26])

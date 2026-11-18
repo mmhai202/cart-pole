@@ -8,7 +8,7 @@ import numpy as np
 
 from cartpole import Plant
 from cartpole.integration import advance, advance_actuator
-from cartpole.kalman import KalmanSettings, KalmanFilter
+from cartpole.ekf import EKFSettings, EKF
 from cartpole.disturbance import DisturbanceObserver, DisturbanceObserverSettings
 from cartpole.model import cart_friction_force
 from cartpole.swingup import SwingUpController, SwingUpSettings, wrap_angle
@@ -85,7 +85,7 @@ def validate_run(duration, dt, substeps, force_limit, recovery):
 
 def simulate(initial, K, force_limit, plant=Plant(), dt=0.02, duration=10.0,
              substeps=25, recovery=Recovery(), force_push=(),
-             actuator=Actuator(), measurement_noise=MeasurementNoise(), kalman=KalmanSettings(),
+             actuator=Actuator(), measurement_noise=MeasurementNoise(), ekf=EKFSettings(),
              disturbance_observer=DisturbanceObserverSettings(), swing_up=SwingUpSettings()):
     """Simulate the nonlinear plant until horizon or first detected rail violation.
 
@@ -148,9 +148,9 @@ def simulate(initial, K, force_limit, plant=Plant(), dt=0.02, duration=10.0,
     last = n
     for k in range(n):
         measured[k] = state[k] + noise[k]
-        if kalman.enabled:
+        if ekf.enabled:
             if estimator is None:
-                estimator = KalmanFilter(measured[k], measurement_noise.std, kalman)
+                estimator = EKF(measured[k], measurement_noise.std, ekf, plant, tau)
                 estimated[k] = estimator.state
             else:
                 estimated[k] = estimator.update(measured[k])
@@ -173,7 +173,7 @@ def simulate(initial, K, force_limit, plant=Plant(), dt=0.02, duration=10.0,
             state[k + 1], actual[k + 1], interval_peak = advance_actuator(
                 state[k], actual[k], command[k], disturbance[k], dt, substeps, plant, tau)
         if estimator is not None:
-            estimator.predict(dt)
+            estimator.predict(dt, command[k])
         peak_x = max(peak_x, float(interval_peak))
         if not np.all(np.isfinite(state[k + 1])) or peak_x > plant.rail_limit:
             safe = False
@@ -195,7 +195,7 @@ def simulate(initial, K, force_limit, plant=Plant(), dt=0.02, duration=10.0,
         outside = np.flatnonzero(~near)
         settling_time = float(time[outside[-1] + 1] if len(outside) else 0.0)
     metrics = {"success": success, "recovery_state_source": "true",
-               "controller_state_source": "kalman" if kalman.enabled else "measured",
+               "controller_state_source": "ekf" if ekf.enabled else "measured",
                "disturbance_compensation_enabled": disturbance_observer.enabled,
                "rail_safe": safe, "peak_abs_x_m": float(peak_x),
                "peak_abs_theta_deg": float(np.rad2deg(np.max(np.abs(recovery_state[:, 2])))),

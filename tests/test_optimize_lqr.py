@@ -52,17 +52,17 @@ class OptimizerTests(unittest.TestCase):
         none_recovered = self.evaluate_metrics([unsettled, unsettled], 0)
         self.assertLess(one_recovered["score"], none_recovered["score"])
 
-    def test_optimizer_uses_configured_kalman(self):
-        self.config.setdefault("controller", {})["kalman"] = {"enabled": True}
+    def test_optimizer_uses_configured_ekf(self):
+        self.config.setdefault("controller", {})["ekf"] = {"enabled": True}
         scenario = Scenario(self.path, self.config)
         with patch("cartpole_tuning.evaluation.simulate", return_value={"metrics": {
                 "success": True, "rail_safe": True}}) as run, \
                 patch("cartpole_tuning.evaluation.performance_cost", return_value=0):
             evaluate([scenario], [100, 5, 300, 5], .03, [42])
-        self.assertTrue(run.call_args.kwargs["kalman"].enabled)
+        self.assertTrue(run.call_args.kwargs["ekf"].enabled)
         config = candidate_config(scenario, [100, 5, 300, 5], .03)
-        self.assertEqual(config["controller"]["kalman"], {"enabled": True})
-        self.assertNotIn("kalman", config)
+        self.assertEqual(config["controller"]["ekf"], {"enabled": True})
+        self.assertNotIn("ekf", config)
 
     def test_optimizer_preserves_and_uses_nested_actuator_force_limit(self):
         self.config["simulation"]["actuator"] = {"force_limit_N": 3, "response_time_constant_s": .1}

@@ -82,7 +82,8 @@ class SwingUpTests(unittest.TestCase):
         assert_allclose(trial['nominal_force'], trial['requested_force'])
 
     def test_reference_swing_up_recovers_with_noise_lag_and_friction(self):
-        # Fixed unforced reference, independent of the tunable example config.
+        # Fixed unforced 20 Hz reference, including its original process-noise
+        # levels, independent of the tunable 50 Hz example configuration.
         config = {
             'simulation': {
                 'duration_s': 10,
@@ -96,7 +97,8 @@ class SwingUpTests(unittest.TestCase):
                 'force_push': [],
             },
             'controller': {'dt': .05, 'lqr': {'q': [30, 10, 300, 10], 'r': 1.0},
-                           'kalman': {'enabled': True}, 'swing_up': {'enabled': True}},
+                           'ekf': {'enabled': True, 'process_std': [.04, 2, .08, 4]},
+                           'swing_up': {'enabled': True}},
         }
         experiment = Experiment(config)
         assert_allclose(experiment.initial, [0, 0, np.pi, 0])
@@ -104,7 +106,7 @@ class SwingUpTests(unittest.TestCase):
         trial = simulate(experiment.initial, design['K'], experiment.limit, experiment.plant,
                          experiment.dt, experiment.duration, experiment.substeps, experiment.recovery,
                          actuator=experiment.actuator, measurement_noise=experiment.noise,
-                         kalman=experiment.kalman, swing_up=experiment.swing_up)
+                         ekf=experiment.ekf, swing_up=experiment.swing_up)
         self.assertTrue(trial['metrics']['success'])
         self.assertTrue(trial['metrics']['rail_safe'])
         self.assertLess(trial['metrics']['first_balance_time_s'], 4)
@@ -130,7 +132,7 @@ class SwingUpTests(unittest.TestCase):
         trial = simulate(experiment.initial, design['K'], experiment.limit, experiment.plant,
                          experiment.dt, experiment.duration, experiment.substeps, experiment.recovery,
                          force_push=experiment.pushes, actuator=experiment.actuator,
-                         measurement_noise=experiment.noise, kalman=experiment.kalman,
+                         measurement_noise=experiment.noise, ekf=experiment.ekf,
                          disturbance_observer=experiment.observer, swing_up=experiment.swing_up)
         self.assertTrue(trial['metrics']['success'])
         self.assertTrue(trial['metrics']['rail_safe'])

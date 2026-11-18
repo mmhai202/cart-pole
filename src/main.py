@@ -92,7 +92,7 @@ def main(argv=None):
             experiment.initial, design["K"], experiment.limit, experiment.plant,
             experiment.dt, experiment.duration, experiment.substeps, experiment.recovery,
             force_push=experiment.pushes, actuator=experiment.actuator,
-            measurement_noise=experiment.noise, kalman=experiment.kalman,
+            measurement_noise=experiment.noise, ekf=experiment.ekf,
             disturbance_observer=experiment.observer, swing_up=experiment.swing_up,
         )
     except (OSError, ValueError) as error:

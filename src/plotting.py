@@ -83,9 +83,11 @@ def build_scene(trial, force_limit, plant, recovery):
     from matplotlib.patches import Circle, FancyArrowPatch, FancyBboxPatch
     from matplotlib.ticker import FuncFormatter, MaxNLocator
 
-    background, panel, foreground = "#0c1422", "#141f30", "#eef3fc"
-    muted, grid = "#b0bed1", "#29374b"
-    blue, violet, green, amber, red = "#65c5ff", "#b69aff", "#63d9b3", "#ffc271", "#ff7e8b"
+    background, panel, foreground = "#f3f2ee", "#ffffff", "#292d30"
+    muted, grid = "#687076", "#d9dcde"
+    blue, angle_color, green, amber, red = "#28658e", "#a4563d", "#28734b", "#9a6b00", "#b5504b"
+    orange = "#d46a1f"
+    steel, steel_edge = "#8196a3", "#526775"
     duration = float(trial["time"][-1])
     times = trial["time"]
     fig = plt.figure(figsize=(9.6, 10.8), dpi=100, facecolor=background)
@@ -103,12 +105,11 @@ def build_scene(trial, force_limit, plant, recovery):
     def card(y, height):
         fig.add_artist(FancyBboxPatch(
             (0.05, y * y_scale), 0.90, height * y_scale, transform=fig.transFigure,
-            boxstyle="round,pad=0,rounding_size=0.016", facecolor=panel,
+            boxstyle="round,pad=0,rounding_size=0.006", facecolor=panel,
             edgecolor=grid, linewidth=0.7, zorder=0))
 
     card(0.569, 0.309)
-    text(0.078, 0.849, "SIMULATION", fontsize=11, color=muted, weight="bold")
-    mode_label = text(0.34, 0.849, "", fontsize=11, color=green, weight="bold")
+    mode_label = text(0.078, 0.849, "", fontsize=11, color=green, weight="bold")
     clock = text(0.922, 0.849, "", fontsize=16, ha="right", family="DejaVu Sans Mono")
     world = add_axes([0.078, 0.605, 0.844, 0.22], facecolor=panel)
     # Keep both rail ends visible with a fixed camera throughout the run.
@@ -132,22 +133,22 @@ def build_scene(trial, force_limit, plant, recovery):
     world.plot([0, 0], [-0.21, -0.13], lw=2, color=green)
     cart = FancyBboxPatch((-0.18, -0.075), 0.36, 0.15,
                          boxstyle="round,pad=0,rounding_size=0.025",
-                         facecolor="#3b697d", edgecolor="#92b8c8", lw=1.2, zorder=4)
+                         facecolor="#dce3e6", edgecolor=steel_edge, lw=1.2, zorder=4)
     world.add_patch(cart)
-    wheels = [Circle((offset, -0.115), 0.035, facecolor=foreground,
+    wheels = [Circle((offset, -0.115), 0.035, facecolor=steel,
                      edgecolor=panel, lw=1.8, zorder=5) for offset in (-0.11, 0.11)]
     for wheel in wheels:
         world.add_patch(wheel)
-    rod, = world.plot([], [], color=foreground, lw=4, solid_capstyle="round", zorder=6)
-    pivot = Circle((0, 0.075), 0.024, facecolor=panel, edgecolor=foreground, lw=1.5, zorder=8)
+    rod, = world.plot([], [], color=steel, lw=4, solid_capstyle="round", zorder=6)
+    pivot = Circle((0, 0.075), 0.024, facecolor=panel, edgecolor=steel_edge, lw=1.5, zorder=8)
     world.add_patch(pivot)
-    bob = Circle((0, 0), 0.054, facecolor=violet, edgecolor=foreground, lw=1.4, zorder=7)
+    bob = Circle((0, 0), 0.054, facecolor="#b1c5cf", edgecolor=steel_edge, lw=1.4, zorder=7)
     world.add_patch(bob)
     disturbance = FancyArrowPatch((0, 0), (0, 0), arrowstyle="-|>",
-                                  mutation_scale=16, color=amber, lw=2.5,
+                                  mutation_scale=16, color=orange, lw=2.5,
                                   shrinkA=0, shrinkB=0, zorder=10)
     world.add_patch(disturbance)
-    force_origin = Circle((0, 0), 0.013, facecolor=foreground,
+    force_origin = Circle((0, 0), 0.013, facecolor=steel_edge,
                           edgecolor=panel, lw=0.6, zorder=11)
     world.add_patch(force_origin)
 
@@ -164,7 +165,7 @@ def build_scene(trial, force_limit, plant, recovery):
     angles = wrap_angle(trial["state"][:, 2]) if swing_up else trial["state"][:, 2]
     values = [np.rad2deg(angles), trial["state"][:, 0], actual]
     labels = ["POLE ANGLE", "CART POSITION", "ACTUATOR FORCE"]
-    colors = [violet, green, blue]
+    colors = [angle_color, green, blue]
     positions = [0.395, 0.225, 0.055]
     target_labels = [f"Target ±{np.rad2deg(recovery.theta):g}°",
                      f"Target ±{recovery.x:g} m", f"Limit ±{force_limit:g} N"]
@@ -210,7 +211,7 @@ def build_scene(trial, force_limit, plant, recovery):
         markers.append(marker)
         cursors.append(cursor)
         axes.append(ax)
-    push_trace, = axes[2].plot([], [], color=amber, lw=1.7, drawstyle="steps-post")
+    push_trace, = axes[2].plot([], [], color=orange, lw=1.7, drawstyle="steps-post")
     command_trace, = axes[2].plot([], [], color=muted, lw=1.2, ls="--", drawstyle="steps-post")
     axes[2].legend([traces[2], command_trace, push_trace], ["Actual", "Command", "External"],
                    loc="upper right", bbox_to_anchor=(1, 1.20), ncol=3,
@@ -248,8 +249,10 @@ def build_scene(trial, force_limit, plant, recovery):
         disturbance.set_visible(abs(push) > 0.03)
         length = arrow_scale * np.sign(push) * min(abs(push) / force_limit, 1.5)
         disturbance.set_positions((x, 0), (x + length, 0))
-        clock.set_text(f"{t:05.2f} / {duration:g} s")
-        mode_label.set_text("LQR BALANCE" if modes is None or modes[force_index] else "SWING-UP")
+        clock.set_text(f"{t:.2f} / {duration:.2f} s")
+        balancing = modes is None or modes[force_index]
+        mode_label.set_text("LQR BALANCE" if balancing else "SWING-UP")
+        mode_label.set_color(green if balancing else amber)
         display_angle = np.rad2deg(wrap_angle(theta) if swing_up else theta)
         readouts[0].set_text(f"{display_angle:+.1f}°")
         readouts[1].set_text(f"{x:+.3f} m")

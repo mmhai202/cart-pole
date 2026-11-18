@@ -323,7 +323,7 @@ class CommandLineTests(unittest.TestCase):
         self.assertEqual(summary["duration_s"], 10)
         self.assertEqual(summary["dt_s"], 0.02)
         self.assertEqual(summary["integration_substeps"], 10)
-        self.assertFalse(summary["kalman"]["enabled"])
+        self.assertFalse(summary["ekf"]["enabled"])
         self.assertEqual(summary["trial"]["controller_state_source"], "measured")
         assert_allclose(summary["design"]["K"], design_lqr(dt=0.02)["K"])
         self.assertEqual(set(summary["config"]), {"simulation"})
@@ -478,10 +478,10 @@ class CommandLineTests(unittest.TestCase):
                                   [1, 1, "1", 1], [1, 1, float("inf"), 1])]
         options += [{"controller": {"lqr": {"r": value}}}
                     for value in (True, "0.1", 0, -1, None, float("nan"))]
-        options += [{"controller": {"kalman": value}}
+        options += [{"controller": {"ekf": value}}
                     for value in (None, [], True, {"unknown": 1}, {"enabled": 1},
                                   {"process_std": [1, 2, 3]})]
-        options += [{"kalman": {"enabled": True}}]
+        options += [{"ekf": {"enabled": True}}]
         options += [{"video": value} for value in (None, [], True, {"unknown": 1})]
         options += [{"video": {"fps": value}} for value in (True, "20", 20.0, 0, 121)]
         options += [self.with_simulation(actuator=value) for value in (None, True, [], {"unknown": 1})]
@@ -506,15 +506,15 @@ class CommandLineTests(unittest.TestCase):
                 self.assertEqual(error.exception.code, 2)
                 self.assertFalse(self.results_root.exists())
 
-    def test_kalman_config_reaches_controller_and_saved_results(self):
-        self.config.setdefault("controller", {})["kalman"] = {"enabled": True, "process_std": [0.02, 1, 0.04, 2]}
+    def test_ekf_config_reaches_controller_and_saved_results(self):
+        self.config.setdefault("controller", {})["ekf"] = {"enabled": True, "process_std": [0.02, 1, 0.04, 2]}
         self.simulation["measurement_noise"] = {"angle_std_deg": 0.1}
         summary = self.run_cli()
         trial, _, _, _ = load_results(self.output)
-        self.assertTrue(summary["kalman"]["enabled"])
-        self.assertEqual(summary["config"]["controller"]["kalman"], self.config["controller"]["kalman"])
-        self.assertNotIn("kalman", summary["config"])
-        self.assertEqual(summary["trial"]["controller_state_source"], "kalman")
+        self.assertTrue(summary["ekf"]["enabled"])
+        self.assertEqual(summary["config"]["controller"]["ekf"], self.config["controller"]["ekf"])
+        self.assertNotIn("ekf", summary["config"])
+        self.assertEqual(summary["trial"]["controller_state_source"], "ekf")
         assert_allclose(trial["requested_force"],
                         -trial["estimated_state"][:-1] @ np.array(summary["design"]["K"]).ravel())
         self.assertFalse(np.array_equal(trial["estimated_state"], trial["measured_state"]))

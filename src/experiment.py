@@ -5,7 +5,7 @@ from dataclasses import asdict
 import numpy as np
 
 from configuration import (
-    experiment_settings, kalman_settings, observer_settings, physical_settings,
+    experiment_settings, ekf_settings, observer_settings, physical_settings,
     plant_settings, swing_up_settings,
 )
 from simulation import Recovery
@@ -17,7 +17,7 @@ class Experiment:
     def __init__(self, config):
         self.config = config
         self.dt, self.q, self.r = experiment_settings(config)
-        self.kalman = kalman_settings(config)
+        self.ekf = ekf_settings(config)
         self.observer = observer_settings(config)
         self.swing_up = swing_up_settings(config)
         self.plant = plant_settings(config)
@@ -43,10 +43,16 @@ class Experiment:
             "config": self.config,
             "actuator": {**asdict(self.actuator), "force_limit_N": self.limit, "initial_force_N": 0.0},
             "measurement_noise": asdict(self.noise),
-            "kalman": {**asdict(self.kalman), "prediction_model": "independent_random_walk",
+            "ekf": {**asdict(self.ekf),
+                    "prediction_model": "nonlinear_mechanics_actuator_lag_augmented_disturbance",
                     "process_covariance": "diag(process_std**2) * dt",
                     "measurement_covariance": "diag(measurement_noise.std**2)",
-                    "initialization": "first_measurement"},
+                    "initialization": "first_measurement",
+                    "disturbance_process_covariance": "disturbance_process_std**2 * dt",
+                    "disturbance_initial_mean_N": 0.0,
+                    "initial_motor_force_N": 0.0,
+                    "prediction_input": "previous_saturated_command",
+                    "dry_friction_model": "absorbed_in_estimated_unknown_force"},
             "swing_up": asdict(self.swing_up),
             "lqr_friction_model": "viscous_only",
             "lqr_state_order": ["position", "velocity", "angle", "angular_velocity"],

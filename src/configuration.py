@@ -8,7 +8,7 @@ import numpy as np
 
 from cartpole import Plant
 from cartpole.disturbance import DisturbanceObserverSettings
-from cartpole.kalman import KalmanSettings
+from cartpole.ekf import EKFSettings
 from cartpole.swingup import SwingUpSettings
 from simulation import Actuator, MeasurementNoise
 
@@ -30,7 +30,7 @@ def _settings(values, name, cls):
 
 def _controller_section(config):
     return _section(config.get("controller", {}), "controller",
-                    {"dt", "lqr", "kalman", "disturbance_observer", "swing_up"})
+                    {"dt", "lqr", "ekf", "disturbance_observer", "swing_up"})
 
 
 def _simulation_section(config):
@@ -87,7 +87,7 @@ def load_config(path):
             raise ValueError(f"simulation.force_push[{i}] must satisfy 0 <= time_s < time_e <= duration_s.")
     experiment_settings(config)
     physical_settings(config)
-    kalman_settings(config)
+    ekf_settings(config)
     observer_settings(config)
     swing_up_settings(config)
     plant_settings(config)
@@ -108,10 +108,10 @@ def plant_settings(config):
     return Plant(**{mapping[name]: value for name, value in values.items()})
 
 
-def kalman_settings(config):
+def ekf_settings(config):
     """Read optional measurement-filter settings."""
     controller = _controller_section(config)
-    return _settings(controller.get("kalman", {}), "controller.kalman", KalmanSettings)
+    return _settings(controller.get("ekf", {}), "controller.ekf", EKFSettings)
 
 
 def observer_settings(config):

@@ -43,14 +43,16 @@
       ],
       "r": 2.8124241413211955e-05
     },
-    "kalman": {
+    "ekf": {
       "enabled": true,
       "process_std": [
-        0.04,
-        2,
-        0.08,
-        4
-      ]
+        0.0005,
+        0.02,
+        0.001,
+        0.04
+      ],
+      "disturbance_process_std": 10.0,
+      "disturbance_initial_std": 1.0
     },
     "disturbance_observer": {
       "enabled": true,

@@ -79,7 +79,7 @@ def evaluate(scenarios, q, r, seeds):
                 trial = simulate(scenario.initial, K, scenario.limit, scenario.plant,
                                  scenario.dt, scenario.duration, scenario.substeps, scenario.recovery,
                                  force_push=scenario.pushes, actuator=scenario.actuator,
-                                 measurement_noise=replace(scenario.noise, seed=seed), kalman=scenario.kalman,
+                                 measurement_noise=replace(scenario.noise, seed=seed), ekf=scenario.ekf,
                                  disturbance_observer=scenario.observer, swing_up=scenario.swing_up)
                 entry.update(trial["metrics"])
                 entry["performance_cost"] = performance_cost(trial, scenario)
