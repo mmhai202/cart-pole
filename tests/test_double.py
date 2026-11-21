@@ -170,7 +170,7 @@ class DoubleExperimentTests(unittest.TestCase):
             for key in ('state', 'estimated_state', 'measured_state', 'estimated_motor_force', 'controller_mode'):
                 assert_allclose(loaded[key], self.trial[key])
 
-    def test_scene_draws_two_connected_rods_and_only_force_chart(self):
+    def test_scene_draws_two_connected_rods_and_dashboard_charts(self):
         configure_matplotlib()
         import matplotlib.pyplot as plt
         fig, update, _ = build_scene(self.trial, self.experiment.limit,
@@ -182,11 +182,26 @@ class DoubleExperimentTests(unittest.TestCase):
             self.assertEqual(len(rods), 2)
             assert_allclose([rods[0].get_xdata()[-1], rods[0].get_ydata()[-1]],
                             [rods[1].get_xdata()[0], rods[1].get_ydata()[0]])
-            self.assertEqual(len(fig.axes), 2)
+            self.assertEqual(len(fig.axes), 3)
             self.assertEqual([text.get_text() for text in fig.axes[1].get_legend().texts],
                              ['Actual', 'Command', 'External'])
+            self.assertEqual([text.get_text() for text in fig.axes[2].get_legend().texts],
+                             ['x'])
+            position_trace = next(line for line in fig.axes[2].lines if line.get_label() == 'x')
+            trace_times = position_trace.get_xdata()
+            assert_allclose(position_trace.get_ydata(),
+                            np.interp(trace_times, self.trial['time'], self.trial['state'][:, 0]))
             render = _frame_renderer(fig, update)
-            self.assertEqual(np.asarray(render(1)).shape[-1], 4)
+            animated = [artist for artist in fig.findobj() if artist.get_animated()]
+            for time in (0, 1, 5.25, 9.5, .2):
+                cached = np.asarray(render(time)).copy()
+                self.assertEqual(cached.shape, (720, 1280, 4))
+                for artist in animated:
+                    artist.set_animated(False)
+                fig.canvas.draw()
+                assert_allclose(cached, np.asarray(fig.canvas.buffer_rgba()), atol=0)
+                for artist in animated:
+                    artist.set_animated(True)
         finally:
             plt.close(fig)
 

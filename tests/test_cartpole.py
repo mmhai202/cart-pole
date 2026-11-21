@@ -734,7 +734,7 @@ class CommandLineTests(unittest.TestCase):
         )
         self.assertRegex(decoded.stderr, r"\b33\.33 fps\b")
         self.assertRegex(decoded.stderr, r"frame=\s*41\b")
-        self.assertIn("960x720", decoded.stderr)
+        self.assertIn("1280x720", decoded.stderr)
         self.assertFalse(list(self.output.rglob("*.png")))
 
     def test_invalid_json_values_are_rejected_before_writing(self):
@@ -891,7 +891,7 @@ class VideoRenderingTests(unittest.TestCase):
         fig, update = self.make_scene()
         render = _frame_renderer(fig, update)
         animated = [artist for artist in fig.findobj() if artist.get_animated()]
-        for time in (0, 0.05, 0.1, 0.15, 0.2):
+        for time in (0, 0.05, 0.1, 0.15, 0.2, 0.075, 0):
             with self.subTest(time=time):
                 cached = np.asarray(render(time)).copy()
                 for artist in animated:

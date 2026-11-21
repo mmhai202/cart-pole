@@ -137,7 +137,7 @@ class DoubleSwingUpExperimentTests(unittest.TestCase):
             self.assertIn('SWING-UP', [text.get_text() for text in fig.texts])
             update(x.duration)
             self.assertIn('BALANCED', [text.get_text() for text in fig.texts])
-            self.assertEqual(len(fig.axes), 2)
+            self.assertEqual(len(fig.axes), 3)
             force_axis = fig.axes[1]
             self.assertEqual([text.get_text() for text in force_axis.get_legend().texts],
                              ['Actual', 'Command', 'External'])

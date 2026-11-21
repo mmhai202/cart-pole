@@ -35,10 +35,6 @@ For automatic Q/R tuning, see [optimization usage](scripts/USAGE.md).
 
 ## Results
 
-The single example runs for 10 s and the double example for 14 s, both at 50 Hz,
-including measurement noise, 50 ms actuator lag, friction, external pushes, and a rail limited to ±2 m.
-Angles are measured from the upward vertical; the second rod's angle is absolute.
-
-The image below shows the earlier upright stabilization experiment.
+The simulations demonstrate the behavior of the single- and double-pendulum systems under practical constraints and disturbances. The figure below illustrates an earlier upright stabilization experiment.
 
 ![Cart-pole simulation](imgs/simulation.gif)
