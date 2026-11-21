@@ -61,7 +61,8 @@ class CheckpointWriter:
         for scenario in self.scenarios:
             entry = {"scenario": str(scenario.path)}
             try:
-                entry["K"] = design_lqr(scenario.plant, scenario.dt, q=q, r=r)["K"].tolist()
+                entry["K"] = design_lqr(scenario.plant, scenario.dt, q=q, r=r,
+                                         actuator_tau=scenario.actuator.response_time_constant_s)["K"].tolist()
             except (ValueError, np.linalg.LinAlgError) as error:
                 entry.update(K=None, error=str(error))
             gains.append(entry)

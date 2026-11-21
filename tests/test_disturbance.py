@@ -9,8 +9,9 @@ from unittest.mock import patch
 
 import numpy as np
 from numpy.testing import assert_allclose, assert_array_equal
+from scipy.integrate import solve_ivp
 
-from cartpole import Plant, design_lqr
+from cartpole import Plant, design_lqr, linearize
 from cartpole.disturbance import DisturbanceObserver, DisturbanceObserverSettings
 from cartpole.ekf import EKFSettings
 from configuration import observer_settings
@@ -20,6 +21,32 @@ from simulation import Actuator, MeasurementNoise, Recovery, simulate
 
 
 class DisturbanceTests(unittest.TestCase):
+    def test_lagged_motor_commands_do_not_appear_as_unknown_force(self):
+        plant, dt, tau = Plant(), .02, .05
+        obs = DisturbanceObserver(plant, dt, [.001, .01, .002, .02],
+                                  DisturbanceObserverSettings(True), actuator_tau=tau)
+        A, B = linearize(plant)
+        for unknown_force in (0., 2.):
+            with self.subTest(unknown_force=unknown_force):
+                # Reseeding at nonzero force also represents LQR capture after swing-up.
+                z = np.r_[np.zeros(4), 3.0]
+                obs.reset(motor_force=z[4])
+                obs.update(z[:4])
+                for k in range(60):
+                    command = 5 * np.sin(k * .8)
+
+                    def rhs(t, state):
+                        return np.r_[A @ state[:4] + B[:, 0] * (state[4] + unknown_force),
+                                     (command - state[4]) / tau]
+
+                    z = solve_ivp(rhs, (0, dt), z, method="DOP853",
+                                  rtol=1e-11, atol=1e-12).y[:, -1]
+                    obs.update(z[:4], command)
+                    self.assertAlmostEqual(obs.motor_force, z[4], places=9)
+                    if unknown_force == 0:
+                        self.assertAlmostEqual(obs.force, 0, places=8)
+                self.assertAlmostEqual(obs.force, unknown_force, delta=2e-5)
+
     def test_reset_discards_previous_disturbance_before_reseeding(self):
         obs = DisturbanceObserver(Plant(), .02, np.zeros(4), DisturbanceObserverSettings(True))
         obs.update(np.zeros(4))
@@ -89,6 +116,17 @@ class DisturbanceTests(unittest.TestCase):
         compensated = simulate(**args, disturbance_observer=DisturbanceObserverSettings(True, .1, 1))
         self.assertLess(abs(compensated["state"][-1, 0]), abs(raw["state"][-1, 0]) / 5)
         self.assertAlmostEqual(compensated["estimated_disturbance"][-1], 1, delta=.05)
+
+    def test_augmented_motor_feedback_preserves_full_dc_disturbance_cancellation(self):
+        K = design_lqr(actuator_tau=.05)["K"]
+        args = dict(initial=np.zeros(4), K=K, force_limit=15, duration=8, substeps=10,
+                    actuator=Actuator(.05), force_push=[(.5, 7.5, .5)])
+        raw = simulate(**args)
+        compensated = simulate(**args, disturbance_observer=DisturbanceObserverSettings(True, .1, 1))
+        self.assertLess(abs(compensated["state"][-1, 0]), abs(raw["state"][-1, 0]) / 20)
+        self.assertAlmostEqual(compensated["actuator_force"][-1], -.5, delta=.005)
+        assert_allclose(compensated["requested_force"], compensated["nominal_force"]
+                        - (1 + K[0, 4]) * compensated["estimated_disturbance"][:-1])
 
     def test_disabled_observer_preserves_original_lqr_and_csv_round_trip(self):
         t = simulate([0, 0, .01, 0], design_lqr()["K"], 15, duration=1)

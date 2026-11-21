@@ -37,6 +37,8 @@ class Experiment:
     def summary(self, design, trial):
         """Describe the resolved model, controller and measured run outcomes."""
         initial = self.config["simulation"]["initial"]
+        motor_feedback = design["K"].shape[1] == 5
+        compensation_scale = 1 + float(design["K"][0, 4]) if motor_feedback else 1.0
         return {
             "plant": asdict(self.plant), "recovery": asdict(self.recovery), "dt_s": self.dt,
             "integration_substeps": self.substeps, "duration_s": self.duration,
@@ -55,9 +57,16 @@ class Experiment:
                     "dry_friction_model": "absorbed_in_estimated_unknown_force"},
             "swing_up": asdict(self.swing_up),
             "lqr_friction_model": "viscous_only",
-            "lqr_state_order": ["position", "velocity", "angle", "angular_velocity"],
+            "lqr_actuator_model": "first_order" if motor_feedback else "instantaneous_design",
+            "lqr_motor_state_source": "previous_saturated_commands" if motor_feedback else None,
+            "lqr_state_order": (["position", "velocity", "angle", "angular_velocity"]
+                                + (["motor_force"] if motor_feedback else [])),
             "disturbance_observer": {**asdict(self.observer),
-                                     "prediction_model": "nominal_mechanics_previous_saturated_command",
+                                     "prediction_model": ("nominal_mechanics_first_order_actuator_previous_saturated_command"
+                                                          if self.actuator.response_time_constant_s > 0 else
+                                                          "nominal_mechanics_previous_saturated_command"),
+                                     "actuator_time_constant_s": self.actuator.response_time_constant_s,
+                                     "command_compensation_gain": self.observer.compensation_gain * compensation_scale,
                                      "estimated_quantity": "input_equivalent_total_disturbance_N"},
             "initial_angle_deg": initial["angle_deg"], "initial_position_m": initial["position_m"],
             "initial_angular_velocity_deg_s": initial["angular_velocity_deg_s"],

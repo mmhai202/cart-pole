@@ -5,7 +5,7 @@ from dataclasses import dataclass
 import numpy as np
 from scipy.signal import cont2discrete
 
-from .model import linearize
+from .model import linear_actuator_model, linearize
 
 
 @dataclass(frozen=True)
@@ -30,16 +30,23 @@ class DisturbanceObserverSettings:
 class DisturbanceObserver:
     """Estimate the previous interval's unknown equivalent force, then smooth it.
 
-    Prediction uses only the nominal mechanical model and the previous clipped
-    command. No motor time constant, true motor force, or external force is an
-    input. The weighted projection estimates the part of model error that can
-    be represented by the cart-force input; it cannot identify separate causes.
+    Prediction includes nominal motor lag driven by previous clipped commands.
+    True motor force and external force are never inputs. The residual still
+    includes dry friction and mechanical model error as equivalent cart force.
     """
 
-    def __init__(self, plant, dt, measurement_std, settings):
+    def __init__(self, plant, dt, measurement_std, settings, actuator_tau=0.0):
         A, B = linearize(plant)
         self.Ad, self.Bd, _, _, _ = cont2discrete(
             (A, B, np.eye(4), np.zeros((4, 1))), dt, method="zoh")
+        augmented, command, _ = linear_actuator_model(plant, actuator_tau)
+        size = augmented.shape[0]
+        transition, command_input, _, _, _ = cont2discrete(
+            (augmented, command, np.eye(size), np.zeros((size, 1))), dt, method="zoh")
+        self.command_input = command_input[:4, 0]
+        self.motor_input = transition[:4, 4] if size == 5 else np.zeros(4)
+        self.motor_decay = float(transition[4, 4]) if size == 5 else 0.0
+        self.motor_command_gain = float(command_input[4, 0]) if size == 5 else 1.0
         R = np.diag(np.asarray(measurement_std, dtype=float)**2)
         # Approximate residual covariance for two noisy state samples. The
         # small floor also supports exact/noiseless measurements.
@@ -50,19 +57,23 @@ class DisturbanceObserver:
         self.settings = settings
         self.reset()
 
-    def reset(self):
-        """Clear the estimate and discard the previous transition."""
+    def reset(self, motor_force=0.0):
+        """Discard the transition and reseed with the command-predicted motor state."""
         self.previous_state = None
         self.force = 0.0
+        self.motor_force = float(motor_force)
 
     def update(self, state, previous_command=0.0):
         state = np.asarray(state, dtype=float)
         if self.previous_state is not None:
-            prediction = self.Ad @ self.previous_state + self.Bd[:, 0] * previous_command
+            prediction = (self.Ad @ self.previous_state + self.motor_input * self.motor_force
+                          + self.command_input * previous_command)
             residual = state - prediction
             raw_force = float(self.projection @ residual)
             bounded = np.clip(raw_force, -self.settings.estimate_limit_N,
                               self.settings.estimate_limit_N)
             self.force += self.alpha * (bounded - self.force)
+            self.motor_force = (self.motor_decay * self.motor_force
+                                + self.motor_command_gain * previous_command)
         self.previous_state = state.copy()
         return self.force

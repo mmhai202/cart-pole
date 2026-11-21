@@ -43,7 +43,7 @@ class SwingUpController:
         self.plant, self.settings = plant, settings
         self.balancing = False
 
-    def command(self, state, gain):
+    def command(self, state, gain, motor_force=0.0):
         x, velocity, theta, omega = state
         p, cfg = self.plant, self.settings
         angle = float(wrap_angle(theta))
@@ -54,7 +54,10 @@ class SwingUpController:
               and abs(omega) < cfg.capture_angular_velocity_rad_s):
             self.balancing = True
         if self.balancing:
-            return float(-gain @ np.array([x, velocity, angle, omega]))
+            feedback = np.array([x, velocity, angle, omega])
+            if len(gain) == 5:
+                feedback = np.r_[feedback, motor_force]
+            return float(-gain @ feedback)
         sine, cosine = np.sin(theta), np.cos(theta)
         energy_error = (0.5 * p.pole_mass * p.length**2 * omega**2
                         + p.pole_mass * p.gravity * p.length * (cosine - 1))

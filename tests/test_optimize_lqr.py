@@ -73,6 +73,7 @@ class OptimizerTests(unittest.TestCase):
             evaluate([scenario], [100, 5, 300, 5], .03, [42])
         self.assertEqual(run.call_args.args[2], 3)
         self.assertEqual(run.call_args.kwargs["actuator"].response_time_constant_s, .1)
+        np.testing.assert_allclose(run.call_args.args[1], design_lqr(actuator_tau=.1)["K"])
         config = candidate_config(scenario, [100, 5, 300, 5], .03)
         self.assertEqual(config["simulation"]["actuator"], self.config["simulation"]["actuator"])
         self.assertEqual(config["simulation"], self.config["simulation"])

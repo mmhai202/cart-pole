@@ -49,6 +49,47 @@ class CartPoleTests(unittest.TestCase):
         self.assertLess(np.max(np.abs(d["closed_loop_poles"])), 1)
         self.assertTrue(np.all(np.linalg.eigvalsh(P) > 0))
 
+    def test_augmented_lqr_matches_independent_motor_and_mechanics_integration(self):
+        tau, dt = .05, .02
+        d = design_lqr(self.plant, dt=dt, actuator_tau=tau)
+        z = np.array([.02, -.03, .01, .04, 2.0])
+        command = -1.5
+        A, B = linearize(self.plant)
+
+        def rhs(t, state):
+            return np.r_[A @ state[:4] + B[:, 0] * state[4],
+                         (command - state[4]) / tau]
+
+        reference = solve_ivp(rhs, (0, dt), z, method="DOP853",
+                              rtol=1e-12, atol=1e-13).y[:, -1]
+        assert_allclose(d["Ad"] @ z + d["Bd"][:, 0] * command, reference, atol=1e-11)
+        self.assertEqual(d["K"].shape, (1, 5))
+        self.assertEqual(d["Q"][4, 4], 0)
+        Ad, Bd, P, Q, R = [d[key] for key in ("Ad", "Bd", "P", "Q", "R")]
+        residual = Ad.T @ P @ Ad - P - Ad.T @ P @ Bd @ np.linalg.solve(
+            R + Bd.T @ P @ Bd, Bd.T @ P @ Ad) + Q
+        assert_allclose(residual, np.zeros((5, 5)), atol=1e-8)
+        self.assertLess(np.max(np.abs(d["closed_loop_poles"])), 1)
+
+    def test_augmented_feedback_uses_command_prediction_without_true_motor_force(self):
+        K = design_lqr(actuator_tau=.05)["K"]
+        args = dict(initial=[.01, 0, 0, 0], K=K, force_limit=.2, dt=.02,
+                    duration=1, actuator=Actuator(.05))
+        trials = []
+        for reported_force in (0.0, 100.0):
+            # Keep observed mechanics identical while corrupting the plant's
+            # reported motor force. Controller inputs must remain identical.
+            with patch("simulation.advance_actuator", side_effect=lambda state, *args:
+                       (state.copy(), reported_force, abs(state[0]))):
+                trials.append(simulate(**args))
+        assert_array_equal(trials[0]["command_force"], trials[1]["command_force"])
+        predicted = 0.0
+        for command, estimate in zip(trials[0]["command_force"],
+                                     trials[0]["estimated_motor_force"][1:]):
+            predicted = command + (predicted - command) * np.exp(-.02 / .05)
+            self.assertAlmostEqual(estimate, predicted)
+        self.assertTrue(np.any(np.abs(trials[0]["requested_force"]) > .2))
+
     def test_nonlinear_model_satisfies_mechanical_equations(self):
         p = self.plant
         state = np.array([0.3, -0.4, 0.7, 1.2])
@@ -404,13 +445,13 @@ class CommandLineTests(unittest.TestCase):
         original = self.export.call_args.args[0]
         loaded, _, _, _ = load_results(self.output)
         for key in ("time", "state", "measured_state", "actuator_force", "command_force",
-                    "requested_force", "disturbance", "cart_friction_force"):
+                    "requested_force", "disturbance", "cart_friction_force", "estimated_motor_force"):
             assert_array_equal(loaded[key], original[key])
         self.assertEqual(summary["actuator"]["response_time_constant_s"], 0.05)
         self.assertEqual(summary["actuator"]["initial_force_N"], 0)
         assert_allclose(summary["design"]["K"],
-                        design_lqr()["K"])
-        self.assertEqual(len(summary["lqr_state_order"]), 4)
+                        design_lqr(actuator_tau=.05)["K"])
+        self.assertEqual(len(summary["lqr_state_order"]), 5)
         self.assertEqual(summary["measurement_noise"], self.simulation["measurement_noise"])
         self.assertEqual(loaded["actuator_time_constant_s"], 0.05)
         self.assertEqual(loaded["actuator_force"][0], 0)

@@ -67,7 +67,8 @@ def evaluate(scenarios, q, r, seeds):
     cases = []
     for scenario in scenarios:
         try:
-            K = design_lqr(scenario.plant, scenario.dt, q=q, r=r)["K"]
+            K = design_lqr(scenario.plant, scenario.dt, q=q, r=r,
+                           actuator_tau=scenario.actuator.response_time_constant_s)["K"]
             design_error = None
         except (ValueError, np.linalg.LinAlgError) as error:
             design_error = str(error)

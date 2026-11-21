@@ -7,6 +7,11 @@ import numpy as np
 from .model import cart_drive_force, dynamics
 
 
+def predict_motor_force(force, command, dt, tau):
+    """Exact motor state from a held, saturated command; no plant feedback."""
+    return command if tau == 0 else command + (force - command) * np.exp(-dt / tau)
+
+
 def advance(state, force, dt, substeps, plant):
     """Integrate a held force, resolving dry-friction events when enabled."""
     if plant.cart_static_friction > 0:

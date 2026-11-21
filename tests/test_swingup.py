@@ -102,6 +102,7 @@ class SwingUpTests(unittest.TestCase):
         }
         experiment = Experiment(config)
         assert_allclose(experiment.initial, [0, 0, np.pi, 0])
+        # Preserve the original four-state reference as a compatibility check.
         design = design_lqr(experiment.plant, experiment.dt, q=experiment.q, r=experiment.r)
         trial = simulate(experiment.initial, design['K'], experiment.limit, experiment.plant,
                          experiment.dt, experiment.duration, experiment.substeps, experiment.recovery,
@@ -128,7 +129,8 @@ class SwingUpTests(unittest.TestCase):
         experiment = Experiment(load_config(Path(__file__).resolve().parents[1] / 'config.json'))
         self.assertEqual(experiment.dt, .02)
         self.assertTrue(experiment.pushes)
-        design = design_lqr(experiment.plant, experiment.dt, q=experiment.q, r=experiment.r)
+        design = design_lqr(experiment.plant, experiment.dt, q=experiment.q, r=experiment.r,
+                            actuator_tau=experiment.actuator.response_time_constant_s)
         trial = simulate(experiment.initial, design['K'], experiment.limit, experiment.plant,
                          experiment.dt, experiment.duration, experiment.substeps, experiment.recovery,
                          force_push=experiment.pushes, actuator=experiment.actuator,

@@ -7,7 +7,7 @@ from dataclasses import asdict, dataclass
 import numpy as np
 
 from cartpole import Plant
-from cartpole.integration import advance, advance_actuator
+from cartpole.integration import advance, advance_actuator, predict_motor_force
 from cartpole.ekf import EKFSettings, EKF
 from cartpole.disturbance import DisturbanceObserver, DisturbanceObserverSettings
 from cartpole.model import cart_friction_force
@@ -118,24 +118,33 @@ def simulate(initial, K, force_limit, plant=Plant(), dt=0.02, duration=10.0,
     measured = np.full((n + 1, 4), np.nan)
     estimated = np.full((n + 1, 4), np.nan)
     estimated_disturbance = np.zeros(n + 1)
+    estimated_motor_force = np.zeros(n + 1)
     nominal_force = np.full(n, np.nan)
     estimator = None
     rng = np.random.default_rng(measurement_noise.seed)
     noise = rng.normal(size=(n + 1, 4)) * measurement_noise.std
     tau = actuator.response_time_constant_s
     gain = np.asarray(K, dtype=float).ravel()
-    if gain.size != 4 or not np.all(np.isfinite(gain)):
-        raise ValueError("LQR gain must contain four finite numbers.")
-    observer = (DisturbanceObserver(plant, dt, measurement_noise.std, disturbance_observer)
+    if gain.size not in (4, 5) or not np.all(np.isfinite(gain)):
+        raise ValueError("LQR gain must contain four or five finite numbers.")
+    if gain.size == 5 and tau == 0:
+        raise ValueError("A five-state LQR requires a nonzero actuator time constant.")
+    # Shift the desired motor force by -c*d as well as applying -c*d to the
+    # command. This preserves the configured DC cancellation with motor feedback.
+    compensation_scale = 1 + gain[4] if gain.size == 5 else 1.0
+    observer = (DisturbanceObserver(plant, dt, measurement_noise.std, disturbance_observer, tau)
                 if disturbance_observer.enabled else None)
     swing_controller = SwingUpController(plant, swing_up) if swing_up.enabled else None
 
-    def observe(controller_state, previous_command, balancing):
+    def observe(controller_state, previous_command, balancing, motor_force):
         if observer is None:
             return 0.0
         if not balancing:
-            observer.reset()
+            observer.reset(motor_force)
             return 0.0
+        if observer.previous_state is None:
+            # Swing-up may have built a nonzero motor force before LQR capture.
+            observer.reset(motor_force)
         observer_state = controller_state.copy()
         if swing_controller is not None:
             observer_state[2] = wrap_angle(observer_state[2])
@@ -156,13 +165,16 @@ def simulate(initial, K, force_limit, plant=Plant(), dt=0.02, duration=10.0,
                 estimated[k] = estimator.update(measured[k])
         else:
             estimated[k] = measured[k]
-        nominal_force[k] = (-gain @ estimated[k] if swing_controller is None
-                            else swing_controller.command(estimated[k], gain))
+        feedback = np.r_[estimated[k], estimated_motor_force[k]] if gain.size == 5 else estimated[k]
+        nominal_force[k] = (-gain @ feedback if swing_controller is None
+                            else swing_controller.command(estimated[k], gain, estimated_motor_force[k]))
         modes[k] = int(swing_controller is None or swing_controller.balancing)
-        estimated_disturbance[k] = observe(estimated[k], command[k - 1] if k else 0.0, modes[k])
+        estimated_disturbance[k] = observe(estimated[k], command[k - 1] if k else 0.0,
+                                           modes[k], estimated_motor_force[k])
         requested[k] = (nominal_force[k] - disturbance_observer.compensation_gain
-                        * estimated_disturbance[k])
+                        * compensation_scale * estimated_disturbance[k])
         command[k] = np.clip(requested[k], -force_limit, force_limit)
+        estimated_motor_force[k + 1] = predict_motor_force(estimated_motor_force[k], command[k], dt, tau)
         if tau == 0:
             actual[k] = command[k]
             applied[k] = command[k]
@@ -181,7 +193,8 @@ def simulate(initial, K, force_limit, plant=Plant(), dt=0.02, duration=10.0,
             break
     measured[last] = state[last] + noise[last]
     estimated[last] = estimator.update(measured[last]) if estimator is not None else measured[last]
-    estimated_disturbance[last] = observe(estimated[last], command[last - 1], modes[last - 1])
+    estimated_disturbance[last] = observe(estimated[last], command[last - 1], modes[last - 1],
+                                         estimated_motor_force[last])
     # Performance and physical safety use the true trajectory; noisy sensor
     # measurements (optionally filtered) feed the controller only.
     recovery_state = state[:last + 1].copy()
@@ -211,6 +224,7 @@ def simulate(initial, K, force_limit, plant=Plant(), dt=0.02, duration=10.0,
     return {"controller_mode": modes[:last], "time": time[:last + 1], "state": state[:last + 1], "force": applied[:last],
             "actuator_force": actual[:last + 1], "command_force": command[:last],
             "estimated_state": estimated[:last + 1],
+            "estimated_motor_force": estimated_motor_force[:last + 1],
             "estimated_disturbance": estimated_disturbance[:last + 1],
             "nominal_force": nominal_force[:last],
             "measured_state": measured[:last + 1], "actuator_time_constant_s": tau,

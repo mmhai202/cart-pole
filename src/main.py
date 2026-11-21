@@ -47,6 +47,8 @@ def print_report(config_path, experiment, design, trial):
     print(f"  Control step  {dt:g} s ({1 / dt:g} Hz)")
     print(f"  Force limit   {limit:g} N")
     print(f"  Actuator tau  {actuator.response_time_constant_s:g} s (initial force: 0 N)")
+    if design["K"].shape[1] == 5:
+        print("  LQR actuator  First-order motor state predicted from saturated commands")
     print(f"  Cart friction static={plant.cart_static_friction:g} N, "
           f"sliding={plant.cart_coulomb_friction:g} N, viscous={plant.cart_damping:g} N s/m")
     print(f"  Pivot damping {plant.pole_damping:g} N m s/rad")
@@ -87,7 +89,8 @@ def main(argv=None):
     try:
         config = load_config(args.config)
         experiment = Experiment(config)
-        design = design_lqr(experiment.plant, experiment.dt, q=experiment.q, r=experiment.r)
+        design = design_lqr(experiment.plant, experiment.dt, q=experiment.q, r=experiment.r,
+                            actuator_tau=experiment.actuator.response_time_constant_s)
         trial = simulate(
             experiment.initial, design["K"], experiment.limit, experiment.plant,
             experiment.dt, experiment.duration, experiment.substeps, experiment.recovery,

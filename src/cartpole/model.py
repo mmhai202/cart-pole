@@ -1,4 +1,4 @@
-"""Physical parameters, nonlinear dynamics and upright linearization."""
+"""Physical parameters, nonlinear dynamics and upright/actuator linearization."""
 
 from __future__ import annotations
 
@@ -90,3 +90,24 @@ def linearize(plant=Plant()):
     ])
     B = np.array([[0], [1 / M], [0], [-1 / (M * l)]])
     return A, B
+
+
+def linear_actuator_model(plant, tau=0.0):
+    """Return A, command B, and external-force B, including motor lag if present.
+
+    State order is [x, velocity, angle, omega, motor_force] for tau > 0.
+    External disturbances enter the mechanics after the actuator.
+    """
+    if not np.isfinite(tau) or tau < 0:
+        raise ValueError("Actuator time constant must be finite and nonnegative.")
+    A, B = linearize(plant)
+    if tau == 0:
+        return A, B, B.copy()
+    augmented = np.zeros((5, 5))
+    augmented[:4, :4] = A
+    augmented[:4, 4:] = B
+    augmented[4, 4] = -1 / tau
+    command = np.zeros((5, 1))
+    command[4, 0] = 1 / tau
+    disturbance = np.vstack((B, [[0.0]]))
+    return augmented, command, disturbance
