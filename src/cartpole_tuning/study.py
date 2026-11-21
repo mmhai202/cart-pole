@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 from time import monotonic
 
-from .evaluation import Evaluator, PARAMETERS, Q_PARAMETERS
+from .evaluation import Evaluator, q_parameters
 from .persistence import CheckpointWriter
 
 
@@ -28,6 +28,8 @@ class Search:
 def run_study(optuna, storage, args, search):
     scenarios, validation_scenarios = search.scenarios, search.validation_scenarios
     initial_q, initial_r = search.initial_q, search.initial_r
+    q_names = q_parameters(scenarios[0].plant.state_size)
+    parameters = (*q_names, "r")
     bounds, output = search.bounds, search.output
     training_evaluator = Evaluator(scenarios, args.seeds)
     validation_evaluator = Evaluator(validation_scenarios, args.validation_seeds)
@@ -40,7 +42,7 @@ def run_study(optuna, storage, args, search):
         for trial in study.get_trials(states=(optuna.trial.TrialState.RUNNING,)):
             study.tell(trial.number, state=optuna.trial.TrialState.FAIL)
     print(f"TPE LQR SEARCH | {len(scenarios)} scenarios × {len(args.seeds)} seeds per trial", flush=True)
-    print(f"Searching 4 Q weights + R | Output: {output.resolve()}", flush=True)
+    print(f"Searching {len(q_names)} Q weights + R | Output: {output.resolve()}", flush=True)
     previous = output / "report.json"
     if args.resume and previous.is_file():
         baseline = json.loads(previous.read_text())["baseline_training"]
@@ -49,14 +51,14 @@ def run_study(optuna, storage, args, search):
     print(f"Baseline: unsafe={baseline['unsafe']}/{baseline['runs']}, "
           f"recovered={baseline['runs'] - baseline['unrecovered']}/{baseline['runs']}", flush=True)
     if not args.resume:
-        study.enqueue_trial(dict(zip(PARAMETERS, [*initial_q, initial_r])))
+        study.enqueue_trial(dict(zip(parameters, [*initial_q, initial_r])))
 
     writer = CheckpointWriter(output, scenarios, baseline)
 
     def objective(trial):
         values = {name: trial.suggest_float(name, low, high, log=True)
-                  for name, (low, high) in zip(PARAMETERS, bounds)}
-        q, r = [values[name] for name in Q_PARAMETERS], values["r"]
+                  for name, (low, high) in zip(parameters, bounds)}
+        q, r = [values[name] for name in q_names], values["r"]
         evaluation = (baseline if q == list(initial_q) and r == initial_r
                       else training_evaluator(q, r))
         trial.set_user_attr("evaluation", evaluation)
@@ -81,7 +83,7 @@ def run_study(optuna, storage, args, search):
             study.sampler = optuna.samplers.TPESampler(
                 seed=(args.sampler_seed + number) % 2**32, n_startup_trials=args.startup_trials)
             study.optimize(objective, n_trials=1, callbacks=[on_trial])
-        best_q = [study.best_params[name] for name in Q_PARAMETERS]
+        best_q = [study.best_params[name] for name in q_names]
         best_r = study.best_params["r"]
         print("Checking best weights on held-out seeds...", flush=True)
         validation = {"baseline": validation_evaluator(initial_q, initial_r),

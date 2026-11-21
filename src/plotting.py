@@ -78,49 +78,51 @@ def configure_matplotlib():
 
 
 def build_scene(trial, force_limit, plant, recovery):
-    """Build a portrait dashboard with the full rail and three aligned signal cards."""
+    """Build a compact scene with the full rail and one actuator-force chart."""
     import matplotlib.pyplot as plt
     from matplotlib.patches import Circle, FancyArrowPatch, FancyBboxPatch
     from matplotlib.ticker import FuncFormatter, MaxNLocator
 
     background, panel, foreground = "#f3f2ee", "#ffffff", "#292d30"
     muted, grid = "#687076", "#d9dcde"
-    blue, angle_color, green, amber, red = "#28658e", "#a4563d", "#28734b", "#9a6b00", "#b5504b"
+    blue, green, yellow, red = "#28658e", "#28734b", "#c28b00", "#b5504b"
     orange = "#d46a1f"
     steel, steel_edge = "#8196a3", "#526775"
     duration = float(trial["time"][-1])
     times = trial["time"]
-    fig = plt.figure(figsize=(9.6, 10.8), dpi=100, facecolor=background)
-    # Positions use a 1200-unit reference grid for the 1080 px canvas.
-    y_scale = 12 / fig.get_figheight()
-
-    def add_axes(bounds, **kwargs):
-        x, y, width, height = bounds
-        return fig.add_axes([x, y * y_scale, width, height * y_scale], **kwargs)
+    double = plant.state_size == 6
+    fig = plt.figure(figsize=(9.6, 7.2), dpi=100, facecolor=background)
 
     def text(x, y, label, **kwargs):
-        return fig.text(x, y * y_scale, label, color=kwargs.pop("color", foreground),
+        return fig.text(x, y, label, color=kwargs.pop("color", foreground),
                         family=kwargs.pop("family", "DejaVu Sans"), **kwargs)
 
     def card(y, height):
         fig.add_artist(FancyBboxPatch(
-            (0.05, y * y_scale), 0.90, height * y_scale, transform=fig.transFigure,
+            (0.05, y), 0.90, height, transform=fig.transFigure,
             boxstyle="round,pad=0,rounding_size=0.006", facecolor=panel,
             edgecolor=grid, linewidth=0.7, zorder=0))
 
-    card(0.569, 0.309)
-    mode_label = text(0.078, 0.849, "", fontsize=11, color=green, weight="bold")
-    clock = text(0.922, 0.849, "", fontsize=16, ha="right", family="DejaVu Sans Mono")
-    world = add_axes([0.078, 0.605, 0.844, 0.22], facecolor=panel)
+    card(0.34, 0.61)
+    mode_label = text(0.078, 0.905, "", fontsize=11, color=green, weight="bold")
+    clock = text(0.922, 0.905, "", fontsize=16, ha="right", family="DejaVu Sans Mono")
+    world = fig.add_axes([0.078, 0.40, 0.844, 0.44], facecolor=panel)
     # Keep both rail ends visible with a fixed camera throughout the run.
     pole_x = trial["state"][:, 0] + plant.length * np.sin(trial["state"][:, 2])
+    pole_y = 0.075 + plant.length * np.cos(trial["state"][:, 2])
+    total_length = plant.length
+    if double:
+        tip_x = pole_x + plant.length2 * np.sin(trial["state"][:, 4])
+        tip_y = pole_y + plant.length2 * np.cos(trial["state"][:, 4])
+        pole_x = np.r_[pole_x, tip_x]
+        pole_y = np.r_[pole_y, tip_y]
+        total_length += plant.length2
     extent = max(plant.rail_limit + 0.18,
                  np.max(np.abs(trial["state"][:, 0])) + 0.66,
-                 np.max(np.abs(pole_x)) + 0.16, plant.length * 1.5)
+                 np.max(np.abs(pole_x)) + 0.16, total_length * 1.5)
     world.set_xlim(-extent, extent)
-    pole_y = 0.075 + plant.length * np.cos(trial["state"][:, 2])
-    world.set_ylim(min(-0.32 * plant.length - 0.20, np.min(pole_y) - 0.12),
-                   max(1.35 * plant.length + 0.08, np.max(pole_y) + 0.12))
+    world.set_ylim(min(-0.32 * total_length - 0.20, np.min(pole_y) - 0.12),
+                   max(1.15 * total_length + 0.08, np.max(pole_y) + 0.12))
     world.set_aspect("equal", adjustable="box")
     world.axis("off")
     world.axvline(0, color=muted, lw=1, ls=(0, (2, 5)), alpha=0.3)
@@ -144,6 +146,12 @@ def build_scene(trial, force_limit, plant, recovery):
     world.add_patch(pivot)
     bob = Circle((0, 0), 0.054, facecolor="#b1c5cf", edgecolor=steel_edge, lw=1.4, zorder=7)
     world.add_patch(bob)
+    extra_artists = []
+    if double:
+        rod2, = world.plot([], [], color=steel, lw=4, solid_capstyle="round", zorder=6)
+        bob2 = Circle((0, 0), 0.05, facecolor=bob.get_facecolor(), edgecolor=steel_edge, lw=1.4, zorder=7)
+        world.add_patch(bob2)
+        extra_artists.extend([rod2, bob2])
     disturbance = FancyArrowPatch((0, 0), (0, 0), arrowstyle="-|>",
                                   mutation_scale=16, color=orange, lw=2.5,
                                   shrinkA=0, shrinkB=0, zorder=10)
@@ -161,63 +169,62 @@ def build_scene(trial, force_limit, plant, recovery):
     commands = trial.get("command_force", trial["force"])
     modes = trial.get("controller_mode")
     tau = trial.get("actuator_time_constant_s", 0.0)
-    swing_up = trial.get("metrics", {}).get("swing_up_enabled", False)
-    angles = wrap_angle(trial["state"][:, 2]) if swing_up else trial["state"][:, 2]
-    values = [np.rad2deg(angles), trial["state"][:, 0], actual]
-    labels = ["POLE ANGLE", "CART POSITION", "ACTUATOR FORCE"]
-    colors = [angle_color, green, blue]
-    positions = [0.395, 0.225, 0.055]
-    target_labels = [f"Target ±{np.rad2deg(recovery.theta):g}°",
-                     f"Target ±{recovery.x:g} m", f"Limit ±{force_limit:g} N"]
-    axes, cursors, traces, markers, readouts = [], [], [], [], []
-    for row, (label, data, color, y) in enumerate(zip(labels, values, colors, positions)):
-        card(y, 0.155)
-        text(0.078, y + 0.122, label, fontsize=11, color=muted, weight="bold")
-        readouts.append(text(0.078, y + 0.070, "", fontsize=24, color=color))
-        text(0.078, y + 0.031, target_labels[row], fontsize=11, color=muted)
-        ax = add_axes([0.365, y + 0.033, 0.55, 0.100], facecolor=panel)
-        ax.set_xlim(0, duration)
-        ax.tick_params(colors=muted, labelsize=11, length=0, pad=5)
-        ax.xaxis.set_major_locator(MaxNLocator(nbins=5, min_n_ticks=3))
-        ax.yaxis.set_major_locator(MaxNLocator(nbins=3, min_n_ticks=3))
-        ax.yaxis.set_major_formatter(FuncFormatter(lambda value, _: f"{value:g}"))
-        ax.grid(axis="x", color=grid, alpha=0.65, lw=0.7)
-        for spine in ax.spines.values():
-            spine.set_visible(False)
-        ax.axhline(0, color=muted, lw=0.7, alpha=0.35)
-        if row < 2:
-            target = np.rad2deg(recovery.theta) if row == 0 else recovery.x
-            bound = max(target * 1.6, np.max(np.abs(data)) * 1.18)
-            ax.set_ylim(-bound, bound)
-            if row == 1 and bound >= plant.rail_limit:
-                for sign in (-1, 1):
-                    ax.axhline(sign * plant.rail_limit, color=red, lw=0.8, ls="--")
+    # Classify each sample from its history, so seeking/replaying the video
+    # gives the same status and never uses a future settling time.
+    balancing = np.ones(len(times), dtype=bool)
+    if modes is not None:
+        balancing[:-1] = np.asarray(modes, dtype=bool)
+        balancing[-1] = balancing[-2]
+    state_error = trial["state"].copy()
+    state_error[:, 2::2] = wrap_angle(state_error[:, 2::2])
+    near = np.all(np.abs(state_error) <= recovery.for_size(plant.state_size), axis=1)
+    statuses = balancing.astype(int)  # 0: swing-up, 1: balancing, 2: balanced
+    stable_since = None
+    for k, time in enumerate(times):
+        if not balancing[k] or not near[k]:
+            stable_since = None
         else:
-            bound = max(force_limit, np.max(np.abs(trial["disturbance"]))) * 1.18
-            ax.set_ylim(-bound, bound)
-            for sign in (-1, 1):
-                ax.axhline(sign * force_limit, color=blue, lw=0.8, ls=(0, (2, 4)), alpha=0.3)
-        ax.spines["bottom"].set_visible(True)
-        ax.spines["bottom"].set_color(grid)
-        ax.spines["bottom"].set_linewidth(0.7)
-        ax.annotate("s", xy=(duration, 0), xycoords=ax.get_xaxis_transform(),
-                    xytext=(12, -5), textcoords="offset points", ha="left", va="top",
-                    color=muted, fontsize=11, annotation_clip=False)
-        trace, = ax.plot([], [], color=color, lw=2.2,
-                         drawstyle="steps-post" if row == 2 and tau == 0 else "default")
-        marker, = ax.plot([], [], "o", color=color, ms=4, markeredgecolor=panel, markeredgewidth=0.8)
-        cursor = ax.axvline(0, color=foreground, alpha=0.3, lw=0.8)
-        traces.append(trace)
-        markers.append(marker)
-        cursors.append(cursor)
-        axes.append(ax)
-    push_trace, = axes[2].plot([], [], color=orange, lw=1.7, drawstyle="steps-post")
-    command_trace, = axes[2].plot([], [], color=muted, lw=1.2, ls="--", drawstyle="steps-post")
-    axes[2].legend([traces[2], command_trace, push_trace], ["Actual", "Command", "External"],
-                   loc="upper right", bbox_to_anchor=(1, 1.20), ncol=3,
-                   frameon=False, fontsize=10, labelcolor=muted,
-                   handlelength=1.8, columnspacing=1.0, handletextpad=0.6,
-                   borderpad=0, borderaxespad=0)
+            if stable_since is None:
+                stable_since = time
+            if time - stable_since >= recovery.dwell - 1e-10:
+                statuses[k] = 2
+    status_labels = ("SWING-UP", "BALANCING", "BALANCED")
+    status_colors = (red, yellow, green)
+    card(0.05, 0.25)
+    text(0.078, 0.252, "ACTUATOR FORCE", fontsize=11, color=muted, weight="bold")
+    force_readout = text(0.078, 0.165, "", fontsize=24, color=blue)
+    text(0.078, 0.095, f"Limit ±{force_limit:g} N", fontsize=11, color=muted)
+    ax = fig.add_axes([0.365, 0.10, 0.55, 0.15], facecolor=panel)
+    ax.set_xlim(0, duration)
+    ax.tick_params(colors=muted, labelsize=11, length=0, pad=5)
+    ax.xaxis.set_major_locator(MaxNLocator(nbins=5, min_n_ticks=3))
+    ax.yaxis.set_major_locator(MaxNLocator(nbins=3, min_n_ticks=3))
+    ax.yaxis.set_major_formatter(FuncFormatter(lambda value, _: f"{value:g}"))
+    ax.grid(axis="x", color=grid, alpha=0.65, lw=0.7)
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+    ax.axhline(0, color=muted, lw=0.7, alpha=0.35)
+    bound = max(force_limit, np.max(np.abs(trial["disturbance"]))) * 1.18
+    ax.set_ylim(-bound, bound)
+    for sign in (-1, 1):
+        ax.axhline(sign * force_limit, color=blue, lw=0.8, ls=(0, (2, 4)), alpha=0.3)
+    ax.spines["bottom"].set_visible(True)
+    ax.spines["bottom"].set_color(grid)
+    ax.spines["bottom"].set_linewidth(0.7)
+    ax.annotate("s", xy=(duration, 0), xycoords=ax.get_xaxis_transform(),
+                xytext=(12, -5), textcoords="offset points", ha="left", va="top",
+                color=muted, fontsize=11, annotation_clip=False)
+    force_trace, = ax.plot([], [], color=blue, lw=2.2,
+                           drawstyle="steps-post" if tau == 0 else "default")
+    force_marker, = ax.plot([], [], "o", color=blue, ms=4, markeredgecolor=panel, markeredgewidth=0.8)
+    cursor = ax.axvline(0, color=foreground, alpha=0.3, lw=0.8)
+    push_trace, = ax.plot([], [], color=orange, lw=1.7, drawstyle="steps-post")
+    command_trace, = ax.plot([], [], color=muted, lw=1.2, ls="--", drawstyle="steps-post")
+    ax.legend([force_trace, command_trace, push_trace], ["Actual", "Command", "External"],
+              loc="upper right", bbox_to_anchor=(1, 1.22), ncol=3,
+              frameon=False, fontsize=10, labelcolor=muted,
+              handlelength=1.8, columnspacing=1.0, handletextpad=0.6,
+              borderpad=0, borderaxespad=0)
 
     # Keep arrow length bounded so high external forces cannot leave the scene.
     arrow_scale = min(0.8 * plant.length, 0.42)
@@ -244,38 +251,32 @@ def build_scene(trial, force_limit, plant, recovery):
         bob_y = 0.075 + plant.length * np.cos(theta)
         rod.set_data([x, bob_x], [0.075, bob_y])
         bob.center = (bob_x, bob_y)
+        if double:
+            theta2 = np.interp(t, times, trial["state"][:, 4])
+            tip_x = bob_x + plant.length2 * np.sin(theta2)
+            tip_y = bob_y + plant.length2 * np.cos(theta2)
+            rod2.set_data([bob_x, tip_x], [bob_y, tip_y])
+            bob2.center = (tip_x, tip_y)
         force_origin.center = (x, 0)
         # Show the external force at the cart's center.
         disturbance.set_visible(abs(push) > 0.03)
         length = arrow_scale * np.sign(push) * min(abs(push) / force_limit, 1.5)
         disturbance.set_positions((x, 0), (x + length, 0))
         clock.set_text(f"{t:.2f} / {duration:.2f} s")
-        balancing = modes is None or modes[force_index]
-        mode_label.set_text("LQR BALANCE" if balancing else "SWING-UP")
-        mode_label.set_color(green if balancing else amber)
-        display_angle = np.rad2deg(wrap_angle(theta) if swing_up else theta)
-        readouts[0].set_text(f"{display_angle:+.1f}°")
-        readouts[1].set_text(f"{x:+.3f} m")
-        readouts[2].set_text(f"{force:+.1f} N")
-        for row, (trace, marker, cursor) in enumerate(zip(traces, markers, cursors)):
-            cursor.set_xdata([t, t])
-            if row == 2:
-                end = min(index + 1, len(trial["force"]))
-                tx = np.append(times[:end], t)
-                fy = np.append(actual[:end], force)
-                trace.set_data(tx, fy)
-                marker.set_data([t], [force])
-                command_trace.set_data(tx, np.append(commands[:end], command))
-                py = np.append(trial["disturbance"][:end], push)
-                push_trace.set_data(tx, py)
-            else:
-                current = display_angle if row == 0 else x
-                trace.set_data(np.append(times[:index + 1], t),
-                               np.append(values[row][:index + 1], current))
-                marker.set_data([t], [current])
+        mode_label.set_text(status_labels[statuses[index]])
+        mode_label.set_color(status_colors[statuses[index]])
+        force_readout.set_text(f"{force:+.1f} N")
+        cursor.set_xdata([t, t])
+        end = min(index + 1, len(trial["force"]))
+        tx = np.append(times[:end], t)
+        force_trace.set_data(tx, np.append(actual[:end], force))
+        force_marker.set_data([t], [force])
+        command_trace.set_data(tx, np.append(commands[:end], command))
+        push_trace.set_data(tx, np.append(trial["disturbance"][:end], push))
 
-        return (cart, *wheels, rod, pivot, bob, disturbance, force_origin,
-                clock, mode_label, *readouts, *traces, *markers, *cursors, push_trace, command_trace)
+        return (cart, *wheels, rod, pivot, bob, *extra_artists, disturbance, force_origin,
+                clock, mode_label, force_readout, force_trace, force_marker, cursor,
+                push_trace, command_trace)
 
     update(0)
     return fig, update, duration

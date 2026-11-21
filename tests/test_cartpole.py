@@ -327,7 +327,7 @@ class CommandLineTests(unittest.TestCase):
         self.output = Path(temporary.name) / "results"
         self.results_root = self.output
         self.stdout = StringIO()
-        self.config = json.loads((Path(__file__).resolve().parents[1] / "config.json").read_text())
+        self.config = json.loads((Path(__file__).resolve().parents[1] / "config.single.json").read_text())
         self.simulation = self.config["simulation"]
         self.config.pop("controller", None)
         self.config.pop("video", None)
@@ -734,7 +734,7 @@ class CommandLineTests(unittest.TestCase):
         )
         self.assertRegex(decoded.stderr, r"\b33\.33 fps\b")
         self.assertRegex(decoded.stderr, r"frame=\s*41\b")
-        self.assertIn("960x1080", decoded.stderr)
+        self.assertIn("960x720", decoded.stderr)
         self.assertFalse(list(self.output.rglob("*.png")))
 
     def test_invalid_json_values_are_rejected_before_writing(self):
@@ -815,13 +815,51 @@ class CommandLineTests(unittest.TestCase):
             main(["--help"])
         self.assertEqual(error.exception.code, 0)
         text = self.stdout.getvalue()
-        for option in ("config", "config.json"):
+        for option in ("config", "config.single.json"):
             self.assertIn(option, text)
         for flag in ("--angle", "--force", "--force-time", "--force-limit", "--output", "--video", "--heatmap"):
             self.assertNotIn(flag, text)
 
 
 class VideoRenderingTests(unittest.TestCase):
+    def test_status_requires_continuous_stability_and_resets_after_disturbance(self):
+        from cartpole import DoublePlant
+        from plotting import build_scene, configure_matplotlib
+        configure_matplotlib()
+        import matplotlib.pyplot as plt
+
+        times = np.arange(201) * .02
+        for plant in (Plant(), DoublePlant()):
+            with self.subTest(plant=plant):
+                states = np.zeros((len(times), plant.state_size))
+                # Complete rotations are equivalent upright orientations.
+                states[:, 2::2] = 2 * np.pi
+                # Disturb the final pole's speed for one sample at 2 s.
+                states[100, -1] = .2
+                modes = np.ones(len(times) - 1, dtype=int)
+                modes[:10] = 0
+                trial = {"time": times, "state": states, "controller_mode": modes,
+                         "force": np.zeros(len(modes)), "disturbance": np.zeros(len(modes))}
+                fig, update, _ = build_scene(trial, 15, plant, Recovery())
+                try:
+                    label = fig.texts[0]
+                    for time, expected, color in (
+                        (0, "SWING-UP", "#b5504b"),
+                        (.2, "BALANCING", "#c28b00"),
+                        (1.18, "BALANCING", "#c28b00"),
+                        (1.2, "BALANCED", "#28734b"),
+                        (2, "BALANCING", "#c28b00"),
+                        (3, "BALANCING", "#c28b00"),
+                        (3.02, "BALANCED", "#28734b"),
+                        (0, "SWING-UP", "#b5504b"),
+                        (1.2, "BALANCED", "#28734b"),
+                    ):
+                        update(time)
+                        self.assertEqual(label.get_text(), expected)
+                        self.assertEqual(label.get_color(), color)
+                finally:
+                    plt.close(fig)
+
     def make_scene(self):
         from plotting import build_scene, configure_matplotlib
         configure_matplotlib()

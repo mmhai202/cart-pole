@@ -36,21 +36,22 @@ class DisturbanceObserver:
     """
 
     def __init__(self, plant, dt, measurement_std, settings, actuator_tau=0.0):
+        mechanical = plant.state_size
         A, B = linearize(plant)
         self.Ad, self.Bd, _, _, _ = cont2discrete(
-            (A, B, np.eye(4), np.zeros((4, 1))), dt, method="zoh")
+            (A, B, np.eye(mechanical), np.zeros((mechanical, 1))), dt, method="zoh")
         augmented, command, _ = linear_actuator_model(plant, actuator_tau)
         size = augmented.shape[0]
         transition, command_input, _, _, _ = cont2discrete(
             (augmented, command, np.eye(size), np.zeros((size, 1))), dt, method="zoh")
-        self.command_input = command_input[:4, 0]
-        self.motor_input = transition[:4, 4] if size == 5 else np.zeros(4)
-        self.motor_decay = float(transition[4, 4]) if size == 5 else 0.0
-        self.motor_command_gain = float(command_input[4, 0]) if size == 5 else 1.0
+        self.command_input = command_input[:mechanical, 0]
+        self.motor_input = transition[:mechanical, mechanical] if size > mechanical else np.zeros(mechanical)
+        self.motor_decay = float(transition[mechanical, mechanical]) if size > mechanical else 0.0
+        self.motor_command_gain = float(command_input[mechanical, 0]) if size > mechanical else 1.0
         R = np.diag(np.asarray(measurement_std, dtype=float)**2)
         # Approximate residual covariance for two noisy state samples. The
         # small floor also supports exact/noiseless measurements.
-        covariance = R + self.Ad @ R @ self.Ad.T + np.eye(4) * 1e-12
+        covariance = R + self.Ad @ R @ self.Ad.T + np.eye(mechanical) * 1e-12
         weighted_input = np.linalg.solve(covariance, self.Bd)
         self.projection = (weighted_input.T / (self.Bd.T @ weighted_input).item()).ravel()
         self.alpha = -np.expm1(-dt / settings.filter_time_constant_s)

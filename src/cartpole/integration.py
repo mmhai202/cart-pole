@@ -75,10 +75,12 @@ def _advance_dry_friction(state, force, command, external_force, dt, substeps, p
         stuck = state[1] == 0 and abs(drive) <= plant.cart_static_friction
         if stuck:
             def rhs(t, y):
-                theta, omega = y[2:]
-                alpha = (plant.gravity * np.sin(theta) / plant.length
-                         - plant.pole_damping * omega / (plant.pole_mass * plant.length**2))
-                return [0, 0, omega, alpha]
+                applied = motor(t) + external_force
+                # Cancel the effective cart drive to constrain x_ddot = 0,
+                # while integrating all free pendulum coordinates.
+                result = dynamics(y, applied - cart_drive_force(y, applied, smooth), smooth)
+                result[:2] = 0
+                return result
 
             def transition(t, y):
                 # A tiny force tolerance avoids a false event for a stationary

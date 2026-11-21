@@ -1,6 +1,9 @@
 {
   "simulation": {
     "duration_s": 10,
+    "plant": {
+      "rail_limit": 2.0
+    },
     "initial": {
       "position_m": 0,
       "velocity_m_s": 0,

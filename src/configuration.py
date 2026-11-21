@@ -6,7 +6,7 @@ from pathlib import Path
 
 import numpy as np
 
-from cartpole import Plant
+from cartpole import Plant, DoublePlant
 from cartpole.disturbance import DisturbanceObserverSettings
 from cartpole.ekf import EKFSettings
 from cartpole.swingup import SwingUpSettings
@@ -35,7 +35,15 @@ def _controller_section(config):
 
 def _simulation_section(config):
     return _section(config.get("simulation", {}), "simulation",
-                    {"duration_s", "initial", "force_push", "friction", "measurement_noise", "actuator"})
+                    {"duration_s", "initial", "force_push", "friction", "measurement_noise", "actuator",
+                     "model", "plant"})
+
+
+def mechanical_size(config):
+    model = _simulation_section(config).get("model", "single")
+    if model not in ("single", "double"):
+        raise ValueError("simulation.model must be 'single' or 'double'.")
+    return 6 if model == "double" else 4
 
 
 def experiment_settings(config):
@@ -48,9 +56,10 @@ def experiment_settings(config):
     controller = _controller_section(config)
     lqr = _section(controller.get("lqr", {}), "controller.lqr", {"q", "r"})
     dt = positive(controller.get("dt", 0.02), "controller.dt")
-    q = lqr.get("q", [100, 5, 300, 5])
-    if not isinstance(q, list) or len(q) != 4:
-        raise ValueError("controller.lqr.q must contain four positive finite numbers.")
+    size = mechanical_size(config)
+    q = lqr.get("q", [100, 5] + [300, 5] * ((size - 2) // 2))
+    if not isinstance(q, list) or len(q) != size:
+        raise ValueError(f"controller.lqr.q must contain {size} positive finite numbers.")
     for index, value in enumerate(q):
         positive(value, f"controller.lqr.q[{index}]")
     r = positive(lqr.get("r", 0.03), "controller.lqr.r")
@@ -69,8 +78,10 @@ def load_config(path):
         raise ValueError("simulation must contain duration_s, initial, force_push and actuator.")
     if not isinstance(simulation["force_push"], list):
         raise ValueError("simulation.force_push must be a list; use [] for no external pushes.")
-    sections = [("simulation.initial", simulation["initial"],
-                 {"angle_deg", "angular_velocity_deg_s", "position_m", "velocity_m_s"})]
+    initial_fields = {"angle_deg", "angular_velocity_deg_s", "position_m", "velocity_m_s"}
+    if mechanical_size(config) == 6:
+        initial_fields |= {"angle2_deg", "angular_velocity2_deg_s"}
+    sections = [("simulation.initial", simulation["initial"], initial_fields)]
     sections.extend((f"simulation.force_push[{i}]", push, {"force_N", "time_s", "time_e"})
                     for i, push in enumerate(simulation["force_push"]))
     for section, values, required_fields in sections:
@@ -95,23 +106,38 @@ def load_config(path):
 
 
 def plant_settings(config):
-    """Map user-facing friction parameters onto the plant model."""
+    """Resolve the physical model and user-facing friction parameters."""
+    cls = DoublePlant if mechanical_size(config) == 6 else Plant
+    parameters = _section(_simulation_section(config).get("plant", {}),
+                          "simulation.plant", {field.name for field in fields(cls)})
+    for name, value in parameters.items():
+        if type(value) not in (int, float) or not np.isfinite(value):
+            raise ValueError(f"simulation.plant.{name} must be a finite number.")
     mapping = {"cart_static_force_N": "cart_static_friction",
                "cart_sliding_force_N": "cart_coulomb_friction",
                "cart_viscous_N_s_m": "cart_damping",
                "pole_viscous_N_m_s_rad": "pole_damping"}
+    if cls is DoublePlant:
+        mapping["pole2_viscous_N_m_s_rad"] = "pole2_damping"
     values = _section(_simulation_section(config).get("friction", {}),
                       "simulation.friction", mapping.keys())
     for name, value in values.items():
         if type(value) not in (int, float) or not np.isfinite(value) or value < 0:
             raise ValueError(f"simulation.friction.{name} must be finite and nonnegative.")
-    return Plant(**{mapping[name]: value for name, value in values.items()})
+    return cls(**{**parameters, **{mapping[name]: value for name, value in values.items()}})
 
 
 def ekf_settings(config):
     """Read optional measurement-filter settings."""
     controller = _controller_section(config)
-    return _settings(controller.get("ekf", {}), "controller.ekf", EKFSettings)
+    values = controller.get("ekf", {})
+    size = mechanical_size(config)
+    if size == 6 and isinstance(values, dict) and "process_std" not in values:
+        values = {**values, "process_std": [0.0005, 0.02, 0.001, 0.04, 0.001, 0.04]}
+    settings = _settings(values, "controller.ekf", EKFSettings)
+    if len(settings.process_std) != size:
+        raise ValueError(f"controller.ekf.process_std must contain {size} entries.")
+    return settings
 
 
 def observer_settings(config):
@@ -135,6 +161,7 @@ def physical_settings(config):
 
 
 def swing_up_settings(config):
-    """Read optional energy-shaping controller settings."""
-    return _settings(_controller_section(config).get("swing_up", {}),
-                     "controller.swing_up", SwingUpSettings)
+    """Read optional hybrid swing-up and upright-capture settings."""
+    settings = _settings(_controller_section(config).get("swing_up", {}),
+                         "controller.swing_up", SwingUpSettings)
+    return settings

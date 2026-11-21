@@ -13,6 +13,12 @@ from simulation import sample_count, simulate, validate_run
 
 Q_PARAMETERS = ("q_position", "q_velocity", "q_angle", "q_angular_velocity")
 PARAMETERS = (*Q_PARAMETERS, "r")
+
+
+def q_parameters(size):
+    return Q_PARAMETERS + (("q_angle2", "q_angular_velocity2") if size == 6 else ())
+
+
 SIMULATION_ERRORS = (ValueError, FloatingPointError, OverflowError, np.linalg.LinAlgError)
 
 
@@ -38,11 +44,13 @@ def performance_cost(trial, scenario):
     """Fixed, bounded cost independent of the Q/R being searched."""
     state = trial["state"].copy()
     if scenario.swing_up.enabled:
-        state[:, 2] = wrap_angle(state[:, 2])
+        state[:, 2::2] = wrap_angle(state[:, 2::2])
     times = trial["time"]
     if not np.all(np.isfinite(state)):
         raise FloatingPointError("Non-finite simulated state.")
     scales = np.array([scenario.plant.rail_limit, 1, np.deg2rad(15), np.deg2rad(90)])
+    if scenario.plant.state_size == 6:
+        scales = np.r_[scales, scales[2:]]
     error = np.mean(np.clip(state / scales, -1e6, 1e6)**2, axis=1)
     integrated = np.sum((error[1:] + error[:-1]) * 0.5 * np.diff(times))
     # Charge the terminal error over the missing horizon after an early stop.

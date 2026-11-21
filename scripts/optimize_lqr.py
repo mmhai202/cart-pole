@@ -16,14 +16,14 @@ import numpy as np
 import scipy
 
 from configuration import load_config
-from cartpole_tuning.evaluation import PARAMETERS, Scenario
+from cartpole_tuning.evaluation import Scenario, q_parameters
 from cartpole_tuning.persistence import write_json
 from cartpole_tuning.study import Search, run_study
 
 
 def build_parser():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    parser.add_argument("configs", type=Path, nargs="*", default=[Path("config.json")],
+    parser.add_argument("configs", type=Path, nargs="*", default=[Path("config.single.json")],
                         help="Training scenarios; first config supplies starting Q and R")
     parser.add_argument("--trials", type=int, default=100, help="Additional trials to run, including the initial baseline")
     parser.add_argument("--seeds", type=int, nargs="+", default=[42, 43, 44], help="Shared training noise seeds")
@@ -57,6 +57,8 @@ def prepare_search(args):
     scenarios = [Scenario(path, load_config(path)) for path in args.configs]
     validation_scenarios = ([Scenario(path, load_config(path)) for path in args.validation_configs]
                             if args.validation_configs else scenarios)
+    if len({s.plant.state_size for s in [*scenarios, *validation_scenarios]}) != 1:
+        raise ValueError("All training and validation scenarios must use the same number of poles.")
     initial_q, initial_r = scenarios[0].q, scenarios[0].r
     bounds = [(value / args.search_factor, value * args.search_factor) for value in [*initial_q, initial_r]]
     if any(not (0 < low < high < float("inf")) for low, high in bounds):
@@ -78,7 +80,7 @@ def prepare_output(args, search, optuna_version):
     manifest = {"score_version": 1, "scenarios": [s.snapshot() for s in scenarios],
                 "validation_scenarios": [s.snapshot() for s in validation_scenarios],
                 "seeds": args.seeds, "validation_seeds": args.validation_seeds,
-                "bounds": dict(zip(PARAMETERS, bounds)), "initial_q": initial_q, "initial_r": initial_r,
+                "bounds": dict(zip((*q_parameters(scenarios[0].plant.state_size), "r"), bounds)), "initial_q": initial_q, "initial_r": initial_r,
                 "sampler_seed": args.sampler_seed, "startup_trials": args.startup_trials,
                 "versions": {"python": sys.version.split()[0], "numpy": np.__version__,
                              "scipy": scipy.__version__, "optuna": optuna_version},

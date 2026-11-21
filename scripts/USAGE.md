@@ -1,10 +1,10 @@
 # LQR optimization (TPE)
 
 ```bash
-.venv/bin/python scripts/optimize_lqr.py config.json
+.venv/bin/python scripts/optimize_lqr.py config.single.json
 ```
 
-Tunes all four Q weights and R on a log scale. Results are saved without changing the input config.
+Tunes all four (single pole) or six (double pole) Q weights and R on a log scale. Results are saved without changing the input config.
 
 | Flag | Default | Description |
 |---|---|---|

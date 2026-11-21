@@ -7,7 +7,7 @@ import json
 import numpy as np
 
 from cartpole import design_lqr
-from .evaluation import PARAMETERS, Q_PARAMETERS
+from .evaluation import PARAMETERS, q_parameters
 
 
 def write_json(path, value):
@@ -25,18 +25,18 @@ def candidate_config(scenario, q, r):
     return config
 
 
-def write_trials(path, trials):
+def write_trials(path, trials, parameters=PARAMETERS):
     """Replace the CSV only after the complete snapshot has been written."""
     temporary = path.with_suffix(path.suffix + ".tmp")
     try:
         with temporary.open("w", newline="", encoding="utf-8") as stream:
             writer = csv.writer(stream)
-            writer.writerow(["trial", "state", "score", *PARAMETERS, "unsafe", "unrecovered",
+            writer.writerow(["trial", "state", "score", *parameters, "unsafe", "unrecovered",
                              "numerical_failures", "duration_s"])
             for trial in trials:
                 result = trial.user_attrs.get("evaluation", {})
                 writer.writerow([trial.number, trial.state.name, trial.value,
-                                 *(trial.params.get(name) for name in PARAMETERS),
+                                 *(trial.params.get(name) for name in parameters),
                                  result.get("unsafe"), result.get("unrecovered"),
                                  result.get("numerical_failures"),
                                  trial.duration.total_seconds() if trial.duration else None])
@@ -52,10 +52,12 @@ class CheckpointWriter:
         self.output = output
         self.scenarios = scenarios
         self.baseline = baseline
+        self.q_names = q_parameters(scenarios[0].plant.state_size)
+        self.parameters = (*self.q_names, "r")
         self._best = None
 
     def _export_best(self, best):
-        q = [best.params[name] for name in Q_PARAMETERS]
+        q = [best.params[name] for name in self.q_names]
         r = best.params["r"]
         gains = []
         for scenario in self.scenarios:
@@ -85,6 +87,6 @@ class CheckpointWriter:
                 self._best = self._export_best(best)
         report = {"status": status, "baseline_training": self.baseline, "best": self._best,
                   "validation": validation, "completed_trials": len(complete)}
-        write_trials(self.output / "trials.csv", trials)
+        write_trials(self.output / "trials.csv", trials, self.parameters)
         write_json(self.output / "report.json", report)
         return report

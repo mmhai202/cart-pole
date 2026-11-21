@@ -1,0 +1,90 @@
+{
+  "simulation": {
+    "model": "double",
+    "duration_s": 10,
+    "plant": {
+      "cart_mass": 1.0,
+      "pole_mass": 0.1,
+      "length": 0.5,
+      "pole2_mass": 0.1,
+      "length2": 0.5,
+      "rail_limit": 2.0
+    },
+    "initial": {
+      "position_m": 0,
+      "velocity_m_s": 0,
+      "angle_deg": 180,
+      "angular_velocity_deg_s": 0,
+      "angle2_deg": 180,
+      "angular_velocity2_deg_s": 0
+    },
+    "friction": {
+      "cart_static_force_N": 0.3,
+      "cart_sliding_force_N": 0.2,
+      "cart_viscous_N_s_m": 0.1,
+      "pole_viscous_N_m_s_rad": 0.005,
+      "pole2_viscous_N_m_s_rad": 0.005
+    },
+    "measurement_noise": {
+      "position_std_m": 0.0001,
+      "velocity_std_m_s": 0.001,
+      "angle_std_deg": 0.01,
+      "angular_velocity_std_deg_s": 0.1,
+      "seed": 42
+    },
+    "force_push": [
+      {
+        "time_s": 5,
+        "time_e": 5.5,
+        "force_N": 8
+      },
+      {
+        "time_s": 6,
+        "time_e": 6.5,
+        "force_N": -8
+      }
+    ],
+    "actuator": {
+      "force_limit_N": 15,
+      "response_time_constant_s": 0.05
+    }
+  },
+  "controller": {
+    "dt": 0.02,
+    "lqr": {
+      "q": [
+        1000,
+        100,
+        300,
+        1000,
+        300,
+        1000
+      ],
+      "r": 0.1
+    },
+    "ekf": {
+      "enabled": true,
+      "process_std": [
+        0.0005,
+        0.02,
+        0.001,
+        0.04,
+        0.001,
+        0.04
+      ],
+      "disturbance_process_std": 10,
+      "disturbance_initial_std": 1
+    },
+    "disturbance_observer": {
+      "enabled": true,
+      "compensation_gain": 0.5
+    },
+    "swing_up": {
+      "enabled": true,
+      "trajectory_duration_s": 4.8,
+      "capture_angle_deg": 6,
+      "release_angle_deg": 25,
+      "capture_angular_velocity_rad_s": 0.6
+    }
+  }
+}

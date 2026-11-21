@@ -11,7 +11,9 @@ from cartpole.integration import advance, advance_actuator, predict_motor_force
 from cartpole.ekf import EKFSettings, EKF
 from cartpole.disturbance import DisturbanceObserver, DisturbanceObserverSettings
 from cartpole.model import cart_friction_force
-from cartpole.swingup import SwingUpController, SwingUpSettings, wrap_angle
+from cartpole.swingup import (
+    SwingUpController, DoubleSwingUpController, SwingUpSettings, wrap_angle, TRACKING_Q, TRACKING_R,
+)
 
 
 @dataclass(frozen=True)
@@ -46,6 +48,11 @@ class MeasurementNoise:
                          np.deg2rad(self.angle_std_deg), np.deg2rad(self.angular_velocity_std_deg_s)])
 
 
+    def for_size(self, size):
+        """Use the same sensor precision independently for each pendulum."""
+        return np.r_[self.std, self.std[2:]] if size == 6 else self.std
+
+
 @dataclass(frozen=True)
 class Recovery:
     x: float = 0.05                       # m
@@ -61,6 +68,9 @@ class Recovery:
     @property
     def bounds(self):
         return np.array([self.x, self.velocity, self.theta, self.angular_velocity])
+
+    def for_size(self, size):
+        return np.r_[self.bounds, self.bounds[2:]] if size == 6 else self.bounds
 
 
 def sample_count(duration, dt):
@@ -94,9 +104,13 @@ def simulate(initial, K, force_limit, plant=Plant(), dt=0.02, duration=10.0,
     Each start and width must align with the control period.
     """
     n = validate_run(duration, dt, substeps, force_limit, recovery)
+    size = plant.state_size
+    if ekf.enabled and len(ekf.process_std) != size:
+        raise ValueError(f"EKF process_std must contain {size} entries for this plant.")
+    measurement_std = measurement_noise.for_size(size)
     initial = np.asarray(initial, dtype=float)
-    if initial.shape != (4,) or not np.all(np.isfinite(initial)):
-        raise ValueError("Initial state must contain four finite numbers.")
+    if initial.shape != (size,) or not np.all(np.isfinite(initial)):
+        raise ValueError(f"Initial state must contain {size} finite numbers.")
     if abs(initial[0]) > plant.rail_limit:
         raise ValueError("Initial position is outside the rail.")
     disturbance = np.zeros(n)
@@ -110,31 +124,34 @@ def simulate(initial, K, force_limit, plant=Plant(), dt=0.02, duration=10.0,
             raise ValueError("Push start must align with a control sample.")
         disturbance[start_index:start_index + width_steps] += magnitude
     time = np.arange(n + 1) * dt
-    state = np.full((n + 1, 4), np.nan)
+    state = np.full((n + 1, size), np.nan)
     applied = np.full(n, np.nan)
     actual = np.zeros(n + 1)
     command = np.full(n, np.nan)
     requested = np.full(n, np.nan)
-    measured = np.full((n + 1, 4), np.nan)
-    estimated = np.full((n + 1, 4), np.nan)
+    measured = np.full((n + 1, size), np.nan)
+    estimated = np.full((n + 1, size), np.nan)
     estimated_disturbance = np.zeros(n + 1)
     estimated_motor_force = np.zeros(n + 1)
     nominal_force = np.full(n, np.nan)
     estimator = None
     rng = np.random.default_rng(measurement_noise.seed)
-    noise = rng.normal(size=(n + 1, 4)) * measurement_noise.std
+    noise = rng.normal(size=(n + 1, size)) * measurement_std
     tau = actuator.response_time_constant_s
     gain = np.asarray(K, dtype=float).ravel()
-    if gain.size not in (4, 5) or not np.all(np.isfinite(gain)):
-        raise ValueError("LQR gain must contain four or five finite numbers.")
-    if gain.size == 5 and tau == 0:
-        raise ValueError("A five-state LQR requires a nonzero actuator time constant.")
+    if gain.size not in (size, size + 1) or not np.all(np.isfinite(gain)):
+        raise ValueError(f"LQR gain must contain {size} or {size + 1} finite numbers.")
+    if gain.size == size + 1 and tau == 0:
+        raise ValueError("An actuator-state LQR requires a nonzero actuator time constant.")
     # Shift the desired motor force by -c*d as well as applying -c*d to the
     # command. This preserves the configured DC cancellation with motor feedback.
-    compensation_scale = 1 + gain[4] if gain.size == 5 else 1.0
-    observer = (DisturbanceObserver(plant, dt, measurement_noise.std, disturbance_observer, tau)
+    compensation_scale = 1 + gain[size] if gain.size == size + 1 else 1.0
+    observer = (DisturbanceObserver(plant, dt, measurement_std, disturbance_observer, tau)
                 if disturbance_observer.enabled else None)
-    swing_controller = SwingUpController(plant, swing_up) if swing_up.enabled else None
+    swing_controller = None
+    if swing_up.enabled:
+        swing_controller = (DoubleSwingUpController(plant, swing_up, dt, force_limit, tau)
+                            if size == 6 else SwingUpController(plant, swing_up))
 
     def observe(controller_state, previous_command, balancing, motor_force):
         if observer is None:
@@ -147,7 +164,7 @@ def simulate(initial, K, force_limit, plant=Plant(), dt=0.02, duration=10.0,
             observer.reset(motor_force)
         observer_state = controller_state.copy()
         if swing_controller is not None:
-            observer_state[2] = wrap_angle(observer_state[2])
+            observer_state[2::2] = wrap_angle(observer_state[2::2])
         return observer.update(observer_state, previous_command)
 
     modes = np.zeros(n, dtype=int)  # 0: swing-up, 1: LQR
@@ -159,13 +176,13 @@ def simulate(initial, K, force_limit, plant=Plant(), dt=0.02, duration=10.0,
         measured[k] = state[k] + noise[k]
         if ekf.enabled:
             if estimator is None:
-                estimator = EKF(measured[k], measurement_noise.std, ekf, plant, tau)
+                estimator = EKF(measured[k], measurement_std, ekf, plant, tau)
                 estimated[k] = estimator.state
             else:
                 estimated[k] = estimator.update(measured[k])
         else:
             estimated[k] = measured[k]
-        feedback = np.r_[estimated[k], estimated_motor_force[k]] if gain.size == 5 else estimated[k]
+        feedback = np.r_[estimated[k], estimated_motor_force[k]] if gain.size == size + 1 else estimated[k]
         nominal_force[k] = (-gain @ feedback if swing_controller is None
                             else swing_controller.command(estimated[k], gain, estimated_motor_force[k]))
         modes[k] = int(swing_controller is None or swing_controller.balancing)
@@ -199,8 +216,8 @@ def simulate(initial, K, force_limit, plant=Plant(), dt=0.02, duration=10.0,
     # measurements (optionally filtered) feed the controller only.
     recovery_state = state[:last + 1].copy()
     if swing_controller is not None:
-        recovery_state[:, 2] = wrap_angle(recovery_state[:, 2])
-    near = np.all(np.abs(recovery_state) <= recovery.bounds, axis=1)
+        recovery_state[:, 2::2] = wrap_angle(recovery_state[:, 2::2])
+    near = np.all(np.abs(recovery_state) <= recovery.for_size(size), axis=1)
     tail = time[:last + 1] >= duration - recovery.dwell - 1e-10
     success = bool(safe and np.all(near[tail]))
     settling_time = None
@@ -211,14 +228,25 @@ def simulate(initial, K, force_limit, plant=Plant(), dt=0.02, duration=10.0,
                "controller_state_source": "ekf" if ekf.enabled else "measured",
                "disturbance_compensation_enabled": disturbance_observer.enabled,
                "rail_safe": safe, "peak_abs_x_m": float(peak_x),
-               "peak_abs_theta_deg": float(np.rad2deg(np.max(np.abs(recovery_state[:, 2])))),
+               "peak_abs_theta_deg": float(np.rad2deg(np.max(np.abs(recovery_state[:, 2::2])))),
                "settling_time_s": settling_time,
                "saturation_fraction": float(np.mean(np.abs(requested[:last]) > force_limit)),
                "end_time_s": float(time[last])}
+    if size == 6:
+        metrics["peak_abs_theta1_deg"] = float(np.rad2deg(np.max(np.abs(recovery_state[:, 2]))))
+        metrics["peak_abs_theta2_deg"] = float(np.rad2deg(np.max(np.abs(recovery_state[:, 4]))))
     if swing_controller is not None:
         captures = np.flatnonzero(modes[:last])
         metrics["swing_up_enabled"] = True
         metrics["first_balance_time_s"] = float(time[captures[0]]) if len(captures) else None
+        metrics["swing_up_method"] = "collocation_tvlqr" if size == 6 else "energy_shaping"
+        if size == 6 and swing_controller.plan is not None:
+            plan = swing_controller.plan
+            metrics["swing_up_plan"] = {"duration_s": plan.duration, "iterations": plan.iterations,
+                                       "max_collocation_defect": plan.max_defect,
+                                       "tracking_q": list(TRACKING_Q), "tracking_r": TRACKING_R,
+                                       "peak_abs_cart_m": float(np.max(np.abs(plan.states[:, 0]))),
+                                       "peak_abs_command_N": float(np.max(np.abs(plan.commands)))}
     friction = cart_friction_force(state[:last + 1], actual[:last + 1]
                                    + np.append(disturbance[:last], 0), plant)
     return {"controller_mode": modes[:last], "time": time[:last + 1], "state": state[:last + 1], "force": applied[:last],

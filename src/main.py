@@ -41,17 +41,20 @@ def print_report(config_path, experiment, design, trial):
     measurement_noise, observer = experiment.noise, experiment.observer
     metrics = trial["metrics"]
     settling = metrics["settling_time_s"]
-    print("\nCART-POLE SIMULATION", flush=True)
+    print("\nDOUBLE CART-POLE SIMULATION" if plant.state_size == 6 else "\nCART-POLE SIMULATION", flush=True)
     print(f"  Config        {config_path}")
     print(f"  Controller K  {np.array2string(design['K'], precision=4, suppress_small=True)}")
     print(f"  Control step  {dt:g} s ({1 / dt:g} Hz)")
     print(f"  Force limit   {limit:g} N")
     print(f"  Actuator tau  {actuator.response_time_constant_s:g} s (initial force: 0 N)")
-    if design["K"].shape[1] == 5:
+    if design["K"].shape[1] == plant.state_size + 1:
         print("  LQR actuator  First-order motor state predicted from saturated commands")
     print(f"  Cart friction static={plant.cart_static_friction:g} N, "
           f"sliding={plant.cart_coulomb_friction:g} N, viscous={plant.cart_damping:g} N s/m")
     print(f"  Pivot damping {plant.pole_damping:g} N m s/rad")
+    if plant.state_size == 6:
+        print(f"  Second pole   mass={plant.pole2_mass:g} kg, length={plant.length2:g} m, "
+              f"joint damping={plant.pole2_damping:g} N m s/rad")
     if plant.cart_static_friction > 0:
         print("  LQR model     Nominal plant with viscous damping; dry friction applied in simulation")
     print(f"  Noise std     x={measurement_noise.position_std_m:g} m, "
@@ -64,7 +67,8 @@ def print_report(config_path, experiment, design, trial):
         print(f"  Disturbance   Residual observer; filter={observer.filter_time_constant_s:g} s, "
               f"compensation={observer.compensation_gain:g}")
     if experiment.swing_up.enabled:
-        print("  Swing-up      Energy shaping with hysteretic LQR capture")
+        method = "Collocation + TVLQR tracking" if plant.state_size == 6 else "Energy shaping"
+        print(f"  Swing-up      {method} with hysteretic LQR capture")
     print("\nRESULTS")
     if experiment.swing_up.enabled:
         capture = metrics["first_balance_time_s"]
@@ -73,6 +77,9 @@ def print_report(config_path, experiment, design, trial):
     print(f"  Rail safety   {'SAFE' if metrics['rail_safe'] else 'LIMIT EXCEEDED'}")
     print(f"  Peak position {metrics['peak_abs_x_m']:.3f} m")
     print(f"  Peak angle    {metrics['peak_abs_theta_deg']:.2f} deg")
+    if plant.state_size == 6:
+        print(f"  Pole peaks    lower={metrics['peak_abs_theta1_deg']:.2f} deg, "
+              f"upper={metrics['peak_abs_theta2_deg']:.2f} deg")
     print(f"  Settling time {f'{settling:.2f} s' if settling is not None else 'Not settled'}")
     print(f"  Saturation    {metrics['saturation_fraction']:.1%}")
     print(f"  Simulated     {metrics['end_time_s']:.2f} / {duration:g} s", flush=True)
@@ -80,10 +87,10 @@ def print_report(config_path, experiment, design, trial):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(
-        description="Simulate a nonlinear cart-pole; always save data and one MP4 video.",
+        description="Simulate a nonlinear single or double cart-pole; save data and one MP4 video.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    parser.add_argument("config", nargs="?", type=Path, default=Path("config.json"),
+    parser.add_argument("config", nargs="?", type=Path, default=Path("config.single.json"),
                         help="Experiment JSON file")
     args = parser.parse_args(argv)
     try:
@@ -91,6 +98,9 @@ def main(argv=None):
         experiment = Experiment(config)
         design = design_lqr(experiment.plant, experiment.dt, q=experiment.q, r=experiment.r,
                             actuator_tau=experiment.actuator.response_time_constant_s)
+        if experiment.plant.state_size == 6 and experiment.swing_up.enabled:
+            print(f"Planning double swing-up ({experiment.swing_up.trajectory_duration_s:g} s horizon)...",
+                  flush=True)
         trial = simulate(
             experiment.initial, design["K"], experiment.limit, experiment.plant,
             experiment.dt, experiment.duration, experiment.substeps, experiment.recovery,

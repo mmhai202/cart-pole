@@ -126,7 +126,7 @@ class SwingUpTests(unittest.TestCase):
             assert_allclose(loaded['state'], trial['state'])
 
     def test_default_50hz_experiment_recovers_with_configured_push(self):
-        experiment = Experiment(load_config(Path(__file__).resolve().parents[1] / 'config.json'))
+        experiment = Experiment(load_config(Path(__file__).resolve().parents[1] / 'config.single.json'))
         self.assertEqual(experiment.dt, .02)
         self.assertTrue(experiment.pushes)
         design = design_lqr(experiment.plant, experiment.dt, q=experiment.q, r=experiment.r,

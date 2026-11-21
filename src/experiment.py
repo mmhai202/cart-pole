@@ -31,15 +31,20 @@ class Experiment:
         initial = simulation["initial"]
         self.initial = [initial["position_m"], initial["velocity_m_s"],
                         np.deg2rad(initial["angle_deg"]), np.deg2rad(initial["angular_velocity_deg_s"])]
+        if self.plant.state_size == 6:
+            self.initial += [np.deg2rad(initial["angle2_deg"]),
+                             np.deg2rad(initial["angular_velocity2_deg_s"])]
         self.pushes = [(push["time_s"], push["time_e"] - push["time_s"], push["force_N"])
                        for push in simulation["force_push"]]
 
     def summary(self, design, trial):
         """Describe the resolved model, controller and measured run outcomes."""
         initial = self.config["simulation"]["initial"]
-        motor_feedback = design["K"].shape[1] == 5
-        compensation_scale = 1 + float(design["K"][0, 4]) if motor_feedback else 1.0
+        size = self.plant.state_size
+        motor_feedback = design["K"].shape[1] == size + 1
+        compensation_scale = 1 + float(design["K"][0, size]) if motor_feedback else 1.0
         return {
+            "model": "double" if size == 6 else "single",
             "plant": asdict(self.plant), "recovery": asdict(self.recovery), "dt_s": self.dt,
             "integration_substeps": self.substeps, "duration_s": self.duration,
             "config": self.config,
@@ -60,6 +65,7 @@ class Experiment:
             "lqr_actuator_model": "first_order" if motor_feedback else "instantaneous_design",
             "lqr_motor_state_source": "previous_saturated_commands" if motor_feedback else None,
             "lqr_state_order": (["position", "velocity", "angle", "angular_velocity"]
+                                + (["angle2", "angular_velocity2"] if size == 6 else [])
                                 + (["motor_force"] if motor_feedback else [])),
             "disturbance_observer": {**asdict(self.observer),
                                      "prediction_model": ("nominal_mechanics_first_order_actuator_previous_saturated_command"
@@ -69,6 +75,8 @@ class Experiment:
                                      "command_compensation_gain": self.observer.compensation_gain * compensation_scale,
                                      "estimated_quantity": "input_equivalent_total_disturbance_N"},
             "initial_angle_deg": initial["angle_deg"], "initial_position_m": initial["position_m"],
+            **({"initial_angle2_deg": initial["angle2_deg"],
+                "initial_angular_velocity2_deg_s": initial["angular_velocity2_deg_s"]} if size == 6 else {}),
             "initial_angular_velocity_deg_s": initial["angular_velocity_deg_s"],
             "initial_velocity_m_s": initial["velocity_m_s"],
             "force_push": [{"start_s": start, "duration_s": width, "force_N": force}

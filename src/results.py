@@ -5,7 +5,7 @@ from pathlib import Path
 
 import numpy as np
 
-from cartpole import Plant
+from cartpole import Plant, DoublePlant
 from simulation import Recovery
 
 
@@ -20,6 +20,9 @@ CSV_COLUMNS = (
     "estimated_motor_force_N",
 )
 
+DOUBLE_COLUMNS = ("theta2_rad", "omega2_rad_s", "measured_theta2_rad", "measured_omega2_rad_s",
+                  "estimated_theta2_rad", "estimated_omega2_rad_s")
+
 
 def save_trial(path, trial):
     """Save sample values and pad interval-only forces at the terminal sample."""
@@ -30,14 +33,19 @@ def save_trial(path, trial):
     if modes is None:
         modes = np.ones(len(trial["time"]) - 1, dtype=int)
     data = np.column_stack((
-        trial["time"], trial["state"], trial["actuator_force"],
+        trial["time"], trial["state"][:, :4], trial["actuator_force"],
         interval("requested_force"), interval("disturbance"), interval("command_force"),
-        trial["measured_state"], trial["cart_friction_force"], trial["estimated_state"],
+        trial["measured_state"][:, :4], trial["cart_friction_force"], trial["estimated_state"][:, :4],
         trial["estimated_disturbance"], interval("nominal_force"),
         np.append(modes, np.nan),
         trial["estimated_motor_force"],
     ))
-    np.savetxt(path, data, delimiter=",", header=",".join(CSV_COLUMNS), comments="")
+    columns = CSV_COLUMNS
+    if trial["state"].shape[1] == 6:
+        data = np.column_stack((data, trial["state"][:, 4:], trial["measured_state"][:, 4:],
+                                trial["estimated_state"][:, 4:]))
+        columns += DOUBLE_COLUMNS
+    np.savetxt(path, data, delimiter=",", header=",".join(columns), comments="")
 
 
 def load_results(source):
@@ -62,8 +70,15 @@ def load_results(source):
     trial["estimated_motor_force"] = data[:, 21] if data.shape[1] >= 22 else np.full(len(data), np.nan)
     if data.shape[1] >= 14:
         trial["cart_friction_force"] = data[:, 13]
+    double = summary.get("model") == "double" or "pole2_mass" in summary["plant"]
+    if double:
+        if data.shape[1] != len(CSV_COLUMNS) + len(DOUBLE_COLUMNS):
+            raise ValueError("Double cart-pole CSV is missing second-pole channels.")
+        for key, start in (("state", 22), ("measured_state", 24), ("estimated_state", 26)):
+            trial[key] = np.column_stack((trial[key], data[:, start:start + 2]))
     config = summary["config"]
     # Support earlier configs with top-level actuator or force_limit_N fields.
     actuator = config.get("simulation", {}).get("actuator", config.get("actuator", {}))
     force_limit = actuator["force_limit_N"] if "force_limit_N" in actuator else config["force_limit_N"]
-    return trial, force_limit, Plant(**summary["plant"]), Recovery(**summary["recovery"])
+    cls = DoublePlant if double else Plant
+    return trial, force_limit, cls(**summary["plant"]), Recovery(**summary["recovery"])
