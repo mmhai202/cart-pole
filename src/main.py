@@ -13,8 +13,8 @@ from cartpole import design_lqr
 from configuration import load_config
 from experiment import Experiment
 from plotting import export_video
-from results import save_trial
-from simulation import simulate
+from results import save_trial, comparison_summary
+from simulation import simulate, simulate_comparison
 
 
 OUTPUT_DIR = Path("results")
@@ -92,6 +92,7 @@ def main(argv=None):
     )
     parser.add_argument("config", nargs="?", type=Path, default=Path("config.single.json"),
                         help="Experiment JSON file")
+    parser.add_argument("--compare", action="store_true", help="Overlay independent LQR, MPC and PID runs")
     args = parser.parse_args(argv)
     try:
         config = load_config(args.config)
@@ -101,13 +102,16 @@ def main(argv=None):
         if experiment.plant.state_size == 6 and experiment.swing_up.enabled:
             print(f"Planning double swing-up ({experiment.swing_up.trajectory_duration_s:g} s horizon)...",
                   flush=True)
-        trial = simulate(
-            experiment.initial, design["K"], experiment.limit, experiment.plant,
-            experiment.dt, experiment.duration, experiment.substeps, experiment.recovery,
-            force_push=experiment.pushes, actuator=experiment.actuator,
-            measurement_noise=experiment.noise, ekf=experiment.ekf,
-            disturbance_observer=experiment.observer, swing_up=experiment.swing_up,
-        )
+        if args.compare or experiment.comparison:
+            trial = simulate_comparison(experiment, design)
+        else:
+            trial = simulate(
+                experiment.initial, design["K"], experiment.limit, experiment.plant,
+                experiment.dt, experiment.duration, experiment.substeps, experiment.recovery,
+                force_push=experiment.pushes, actuator=experiment.actuator,
+                measurement_noise=experiment.noise, ekf=experiment.ekf,
+                disturbance_observer=experiment.observer, swing_up=experiment.swing_up,
+            )
     except (OSError, ValueError) as error:
         parser.error(str(error))
 
@@ -115,12 +119,25 @@ def main(argv=None):
     summary = experiment.summary(design, trial)
     print_report(args.config, experiment, design, trial)
     save_trial(output / "simulation.csv", trial)
+    if "comparisons" in trial:
+        summary["comparison"] = comparison_summary(trial)
+        print("\nCONTROLLER COMPARISON")
+        print("  Controller  Recovery  Rail    Peak |x|    End time")
+        for name, other in {"LQR": trial, **trial["comparisons"]}.items():
+            metrics = other["metrics"]
+            print(f"  {name:<10}  {'SUCCESS' if metrics['success'] else 'FAILED':<8}  "
+                  f"{'SAFE' if metrics['rail_safe'] else 'STOP':<6}  "
+                  f"{metrics['peak_abs_x_m']:6.3f} m  {metrics['end_time_s']:5.2f} s")
+            if name != "LQR":
+                save_trial(output / summary["comparison"]["trials"][name]["file"], other)
     (output / "config.json").write_text(json.dumps(config, indent=2, allow_nan=False) + "\n", encoding="utf-8")
     (output / "summary.json").write_text(json.dumps(summary, indent=2, allow_nan=False) + "\n", encoding="utf-8")
     export_video(trial, experiment.limit, experiment.plant, experiment.recovery,
                  output / "simulation.mp4")
     print(f"\nResults saved to {output.resolve()}")
     print("  simulation.csv  |  summary.json  |  config.json  |  simulation.mp4", flush=True)
+    if "comparisons" in trial:
+        print("  simulation.mpc.csv  |  simulation.pid.csv", flush=True)
 
 
 if __name__ == "__main__":

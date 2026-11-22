@@ -48,14 +48,12 @@ def save_trial(path, trial):
     np.savetxt(path, data, delimiter=",", header=",".join(columns), comments="")
 
 
-def load_results(source):
-    """Load the single saved trajectory and its model parameters."""
-    source = Path(source)
-    summary = json.loads((source / "summary.json").read_text(encoding="utf-8"))
-    data = np.loadtxt(source / "simulation.csv", delimiter=",", skiprows=1, ndmin=2)
+def _load_trial(path, summary, metrics):
+    """Read the same channel layout for each independent controller."""
+    data = np.loadtxt(path, delimiter=",", skiprows=1, ndmin=2)
     trial = {"time": data[:, 0], "state": data[:, 1:5],
              "force": data[:-1, 5], "requested_force": data[:-1, 6],
-             "disturbance": data[:-1, 7], "metrics": summary["trial"]}
+             "disturbance": data[:-1, 7], "metrics": metrics}
     actual = data[:, 5].copy()
     if np.isnan(actual[-1]):  # Older CSVs left the terminal force empty.
         actual[-1] = actual[-2]
@@ -76,9 +74,31 @@ def load_results(source):
             raise ValueError("Double cart-pole CSV is missing second-pole channels.")
         for key, start in (("state", 22), ("measured_state", 24), ("estimated_state", 26)):
             trial[key] = np.column_stack((trial[key], data[:, start:start + 2]))
+    return trial
+
+
+def load_results(source):
+    """Load the primary trajectory and the comparison files listed in its summary."""
+    source = Path(source)
+    summary = json.loads((source / "summary.json").read_text(encoding="utf-8"))
+    trial = _load_trial(source / "simulation.csv", summary, summary["trial"])
+    if "comparison" in summary:
+        trial["comparison_settings"] = {key: value for key, value in summary["comparison"].items() if key != "trials"}
+        trial["comparisons"] = {
+            name: _load_trial(source / metadata["file"], summary, metadata["metrics"])
+            for name, metadata in summary["comparison"]["trials"].items()
+        }
     config = summary["config"]
     # Support earlier configs with top-level actuator or force_limit_N fields.
     actuator = config.get("simulation", {}).get("actuator", config.get("actuator", {}))
     force_limit = actuator["force_limit_N"] if "force_limit_N" in actuator else config["force_limit_N"]
-    cls = DoublePlant if double else Plant
+    cls = DoublePlant if summary.get("model") == "double" or "pole2_mass" in summary["plant"] else Plant
     return trial, force_limit, cls(**summary["plant"]), Recovery(**summary["recovery"])
+
+
+def comparison_summary(trial):
+    """Describe independent files and outcomes, including early rail stops."""
+    return {**trial["comparison_settings"], "trials": {
+        name: {"file": f"simulation.{name.lower()}.csv", "metrics": other["metrics"]}
+        for name, other in trial["comparisons"].items()
+    }}

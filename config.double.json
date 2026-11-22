@@ -50,6 +50,15 @@
     }
   },
   "controller": {
+    "comparison": true,
+    "mpc": {
+      "horizon_steps": 30
+    },
+    "pid": {
+      "kp": [18, -300, 450],
+      "ki": [1, 0, 0],
+      "kd": [25, -5, 73]
+    },
     "dt": 0.02,
     "lqr": {
       "q": [

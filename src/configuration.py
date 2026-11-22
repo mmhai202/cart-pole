@@ -10,6 +10,7 @@ from cartpole import Plant, DoublePlant
 from cartpole.disturbance import DisturbanceObserverSettings
 from cartpole.ekf import EKFSettings
 from cartpole.swingup import SwingUpSettings
+from cartpole.controller import MPCSettings, PIDSettings
 from simulation import Actuator, MeasurementNoise
 
 
@@ -30,7 +31,7 @@ def _settings(values, name, cls):
 
 def _controller_section(config):
     return _section(config.get("controller", {}), "controller",
-                    {"dt", "lqr", "ekf", "disturbance_observer", "swing_up"})
+                    {"dt", "lqr", "ekf", "disturbance_observer", "swing_up", "comparison", "mpc", "pid"})
 
 
 def _simulation_section(config):
@@ -101,6 +102,7 @@ def load_config(path):
     ekf_settings(config)
     observer_settings(config)
     swing_up_settings(config)
+    comparison_settings(config)
     plant_settings(config)
     return config
 
@@ -165,3 +167,19 @@ def swing_up_settings(config):
     settings = _settings(_controller_section(config).get("swing_up", {}),
                          "controller.swing_up", SwingUpSettings)
     return settings
+
+
+def comparison_settings(config):
+    """Read comparison switch and validate both alternative controllers."""
+    controller = _controller_section(config)
+    enabled = controller.get("comparison", False)
+    if type(enabled) is not bool:
+        raise ValueError("controller.comparison must be a boolean.")
+    mpc = _settings(controller.get("mpc", {}), "controller.mpc", MPCSettings)
+    pid = _settings(controller.get("pid", {}), "controller.pid", PIDSettings)
+    channels = mechanical_size(config) // 2
+    for name in ("kp", "ki", "kd"):
+        values = getattr(pid, name)
+        if values is not None and len(values) != channels:
+            raise ValueError(f"controller.pid.{name} must contain {channels} entries.")
+    return enabled, mpc, pid

@@ -1,4 +1,4 @@
-"""Render one cart-pole simulation as an H.264 MP4 video."""
+"""Render cart-pole simulations and controller comparisons as H.264 MP4 video."""
 
 from __future__ import annotations
 
@@ -77,8 +77,232 @@ def configure_matplotlib():
     matplotlib.use("Agg")
 
 
+def build_comparison_scene(primary, force_limit, plant, recovery):
+    """Compare synchronized plants in separate panels above shared telemetry."""
+    import matplotlib.pyplot as plt
+    from matplotlib.collections import LineCollection
+    from matplotlib.colors import to_rgba
+    from matplotlib.patches import Circle, FancyArrowPatch, FancyBboxPatch
+    from matplotlib.ticker import MaxNLocator
+
+    background, ink, muted, grid = "#fbfbf9", "#29343d", "#74818a", "#e7eae9"
+    primary_name = primary["metrics"].get("controller", "LQR")
+    trials = {primary_name: primary, **primary["comparisons"]}
+    duration = float(primary.get("comparison_settings", {}).get("duration_s",
+                     max(trial["time"][-1] for trial in trials.values())))
+    double = plant.state_size == 6
+    lengths = [plant.length, plant.length2] if double else [plant.length]
+    length = sum(lengths)
+    columns = min(3, len(trials))
+    rows = (len(trials) + columns - 1) // columns
+    height = 10.8 + 5.8 * (rows - 1)
+    fig = plt.figure(figsize=(19.2, height), dpi=100, facecolor=background)
+    palette = ["#3979b6", "#8a6bb3", "#c5823e", "#287b71", "#b5504b", "#6a7688"]
+    # Fit the recorded motion without reserving an unused full pole length
+    # beyond both rail ends. All panels keep exactly the same camera scale.
+    extent = plant.rail_limit + .3
+    for trial in trials.values():
+        px = trial["state"][:, 0].copy()
+        extent = max(extent, float(np.max(np.abs(px))) + .3)
+        for j, pole_length in enumerate(lengths):
+            px += pole_length * np.sin(trial["state"][:, 2 + 2 * j])
+            extent = max(extent, float(np.max(np.abs(px))) + .15)
+
+    def bounds(left, bottom, width, tall):
+        return [left / 19.2, bottom / height, width / 19.2, tall / height]
+
+    def text(x, y, label, **kwargs):
+        return fig.text(x / 19.2, y / height, label, color=kwargs.pop("color", ink),
+                        family="DejaVu Sans", **kwargs)
+
+    text(.8, height - .55, "Double cart–pole" if double else "Cart–pole", fontsize=23)
+    clock = text(18.4, height - .55, "", fontsize=17, ha="right")
+    push_label = text(9.6, height - .55, "", fontsize=12, color="#b5504b", ha="center")
+
+    # Every controller gets the same rail, camera scale and an opaque cart.
+    records = {}
+    width = 17.6 / columns
+    for i, (name, trial) in enumerate(trials.items()):
+        col, row = i % columns, i // columns
+        left, offset = .8 + col * width, height - 10.8 - row * 5.8
+        center = left + width / 2
+        color = palette[i % len(palette)]
+        text(center, offset + 9.65, name, fontsize=20, color=color, ha="center")
+        status = text(center, offset + 9.3, "", fontsize=11, color=muted, ha="center")
+        readout = text(center, offset + 4.55, "", fontsize=12, ha="center")
+        angle_readout = text(center, offset + 4.22, "", fontsize=12, ha="center")
+        world = fig.add_axes(bounds(left + .1, offset + 4.95, width - .2, 4.05), facecolor=background)
+        world.set_xlim(-extent, extent)
+        world.set_ylim(-max(length + .15, .75), length + .2)
+        world.set_aspect("equal", adjustable="box")
+        world.axis("off")
+        world.plot([-plant.rail_limit, plant.rail_limit], [-.15, -.15], color="#bdc5c9", lw=2)
+        world.plot([0, 0], [-length, length + .1], color=muted, alpha=.25, ls=":", lw=.8)
+        for x in np.linspace(-plant.rail_limit, plant.rail_limit, 9):
+            world.plot([x, x], [-.21, -.16], color=muted, lw=1, alpha=.5)
+        for x in (-plant.rail_limit, plant.rail_limit):
+            world.plot([x, x], [-.24, -.07], color=muted, lw=1.8)
+            world.text(x, -.4, f"{x:+g} m", ha="center", fontsize=10, color=muted)
+        world.text(0, -.4, "0", ha="center", fontsize=10, color=muted)
+        cart = FancyBboxPatch((-.18, -.075), .36, .15,
+                             boxstyle="round,pad=0,rounding_size=0.025",
+                             facecolor=color, edgecolor=color, lw=1.2, zorder=6)
+        world.add_patch(cart)
+        wheels = [Circle((x, -.115), .035, facecolor=color, edgecolor=background, lw=1, zorder=6)
+                  for x in (-.11, .11)]
+        for wheel in wheels:
+            world.add_patch(wheel)
+        rods, bobs, trails, paths = [], [], [], []
+        times, states = trial["time"], trial["state"]
+        px, py = states[:, 0], np.full(len(times), .075)
+        for j, pole_length in enumerate(lengths):
+            rod, = world.plot([], [], color=color, lw=4, solid_capstyle="round", zorder=7)
+            bob = Circle((0, 0), .045, facecolor=color, edgecolor=background, lw=1, zorder=8)
+            world.add_patch(bob)
+            trail = LineCollection([], linewidths=1.3, zorder=2)
+            world.add_collection(trail)
+            px = px + pole_length * np.sin(states[:, 2 + 2 * j])
+            py = py + pole_length * np.cos(states[:, 2 + 2 * j])
+            paths.append(np.column_stack((px, py)))
+            rods.append(rod)
+            bobs.append(bob)
+            trails.append(trail)
+        arrow = FancyArrowPatch((0, 0), (0, 0), arrowstyle="-|>", mutation_scale=17,
+                                color="#b5504b", lw=2.5, zorder=9)
+        world.add_patch(arrow)
+        balancing = np.r_[trial["controller_mode"], trial["controller_mode"][-1]].astype(bool)
+        errors = states.copy()
+        errors[:, 2::2] = wrap_angle(errors[:, 2::2])
+        near = np.all(np.abs(errors) <= recovery.for_size(plant.state_size), axis=1)
+        statuses = np.where(balancing, 1, 0)
+        stable_since = None
+        for k, time in enumerate(times):
+            if not balancing[k] or not near[k]:
+                stable_since = None
+            else:
+                if stable_since is None:
+                    stable_since = time
+                if time - stable_since >= recovery.dwell - 1e-10:
+                    statuses[k] = 2
+        records[name] = dict(trial=trial, color=color, cart=cart, wheels=wheels,
+                             rods=rods, bobs=bobs, trails=trails, paths=paths, arrow=arrow,
+                             status=status, readout=readout, angle_readout=angle_readout,
+                             statuses=statuses, traces=[])
+
+    channels = [("position", "Position · m", (.95, .85, 7.95, 2.4)),
+                ("force", "Actuator force · N", (10.5, .85, 7.95, 2.4))]
+    reference = max(trials.values(), key=lambda trial: trial["time"][-1])
+    pushes = reference["disturbance"]
+    edges = np.r_[0, np.flatnonzero(np.diff(pushes) != 0) + 1, len(pushes)]
+    cursors = []
+    for kind, title, rectangle in channels:
+        ax = fig.add_axes(bounds(*rectangle), facecolor=background)
+        ax.set_xlim(0, duration)
+        ax.tick_params(colors=muted, labelsize=11, length=0, pad=5)
+        ax.xaxis.set_major_locator(MaxNLocator(nbins=6))
+        ax.yaxis.set_major_locator(MaxNLocator(nbins=4))
+        ax.grid(axis="y", color=grid, lw=.7)
+        ax.axhline(0, color=muted, lw=.7, alpha=.4)
+        for spine in ax.spines.values():
+            spine.set_visible(False)
+        ax.set_title(title, loc="left", color=ink, fontsize=13, pad=12)
+        ax.set_xlabel("Time (s)", color=muted, fontsize=10, labelpad=5)
+        for start, end in zip(edges[:-1], edges[1:]):
+            if pushes[start] != 0:
+                ax.axvspan(reference["time"][start], reference["time"][end], color=muted, alpha=.1, lw=0)
+        if kind == "position":
+            bound = max(plant.rail_limit, *(np.max(np.abs(trial["state"][:, 0])) for trial in trials.values())) * 1.1
+            ax.set_ylim(-bound, bound)
+            ax.axhspan(-recovery.x, recovery.x, color="#28734b", alpha=.08, lw=0)
+            for sign in (-1, 1):
+                ax.axhline(sign * plant.rail_limit, color=muted, lw=.8, ls="--", alpha=.55)
+        else:
+            ax.set_ylim(-force_limit * 1.2, force_limit * 1.2)
+            for sign in (-1, 1):
+                ax.axhline(sign * force_limit, color=muted, lw=.8, ls="--", alpha=.55)
+        cursors.append(ax.axvline(0, color=ink, alpha=.4, lw=.8))
+        for name, record in records.items():
+            drawstyle = ("steps-post" if kind == "force" and record["trial"].get("actuator_time_constant_s", 0) == 0
+                         else "default")
+            line, = ax.plot([], [], color=record["color"], lw=2.2, alpha=.65,
+                            drawstyle=drawstyle, label=name)
+            marker, = ax.plot([], [], marker="o", ms=4, color=record["color"], alpha=.65, ls="none")
+            record["traces"].append((kind, line, marker))
+        if kind == "position":
+            ax.legend(loc="upper right", frameon=False, fontsize=10, ncol=min(3, len(trials)), labelcolor=ink)
+
+    def update(time):
+        t = float(np.clip(time, 0, duration))
+        clock.set_text(f"{t:05.2f} / {duration:04.1f} s")
+        active_push = 0.
+        for trial in trials.values():
+            index = int(np.searchsorted(trial["time"], t + 1e-10, side="right") - 1)
+            if 0 <= index < len(trial["disturbance"]):
+                active_push = float(trial["disturbance"][index])
+                break
+        push_label.set_text(f"External push  {active_push:+.1f} N" if abs(active_push) > .03 else "")
+        artists = [clock, push_label, *cursors]
+        for cursor in cursors:
+            cursor.set_xdata([t, t])
+        for record in records.values():
+            trial = record["trial"]
+            times, states = trial["time"], trial["state"]
+            at = min(t, times[-1])
+            index = int(np.clip(np.searchsorted(times, at + 1e-10, side="right") - 1, 0, len(times) - 1))
+            x = float(np.interp(at, times, states[:, 0]))
+            force = float(trial["actuator_force"][index])
+            tau = trial.get("actuator_time_constant_s", 0.)
+            if index < len(trial["command_force"]) and tau > 0:
+                command = trial["command_force"][index]
+                force = command + (force - command) * np.exp(-(at - times[index]) / tau)
+            record["cart"].set_x(x - .18)
+            for wheel, offset in zip(record["wheels"], (-.11, .11)):
+                wheel.center = (x + offset, -.115)
+            px, py, angles = x, .075, []
+            for j, pole_length in enumerate(lengths):
+                angle = float(np.interp(at, times, states[:, 2 + 2 * j]))
+                angles.append(float(np.rad2deg(wrap_angle(angle))))
+                bx, by = px + pole_length * np.sin(angle), py + pole_length * np.cos(angle)
+                record["rods"][j].set_data([px, bx], [py, by])
+                record["bobs"][j].center = (bx, by)
+                start = np.searchsorted(times, at - .6)
+                points = np.vstack((record["paths"][j][start:index + 1], [bx, by]))
+                segments = np.stack((points[:-1], points[1:]), axis=1)
+                rgba = np.tile(to_rgba(record["color"]), (len(segments), 1))
+                rgba[:, 3] = .2 * np.clip(1 - (at - np.r_[times[start:index + 1], at][1:]) / .6, 0, 1)
+                record["trails"][j].set_segments(segments)
+                record["trails"][j].set_colors(rgba)
+                px, py = bx, by
+            tx = np.r_[times[:index + 1], at]
+            stopped = not trial["metrics"]["rail_safe"] and t >= times[-1] - 1e-10
+            for kind, line, marker in record["traces"]:
+                if kind == "position":
+                    values, current = np.r_[states[:index + 1, 0], x], x
+                else:
+                    values, current = np.r_[trial["actuator_force"][:index + 1], force], force
+                line.set_data(tx, values)
+                marker.set_data([at], [current])
+                marker.set_marker("x" if stopped else "o")
+                artists.extend([line, marker])
+            mode = f"RAIL STOP · {times[-1]:.2f}s" if stopped else ("SWING-UP", "BALANCING", "BALANCED")[record["statuses"][index]]
+            record["status"].set_text(mode)
+            record["status"].set_color("#b5504b" if stopped else muted)
+            record["readout"].set_text(f"x {x:+.3f} m     F {force:+.1f} N")
+            record["angle_readout"].set_text("     ".join(f"θ{j + 1} {value:+.1f}°" for j, value in enumerate(angles)))
+            record["arrow"].set_visible(abs(active_push) > .03 and not stopped)
+            record["arrow"].set_positions((x, -.6), (x + np.sign(active_push) * min(abs(active_push) / force_limit, 1.5) * .7, -.6))
+            artists.extend([record["cart"], *record["wheels"], *record["rods"], *record["bobs"],
+                            *record["trails"], record["arrow"], record["status"], record["readout"], record["angle_readout"]])
+        return tuple(artists)
+
+    update(0)
+    return fig, update, duration
+
+
 def build_scene(trial, force_limit, plant, recovery):
     """Build a minimal widescreen scene with a compact telemetry row."""
+    if "comparisons" in trial:
+        return build_comparison_scene(trial, force_limit, plant, recovery)
     import matplotlib.pyplot as plt
     from matplotlib.collections import LineCollection
     from matplotlib.colors import to_rgba
@@ -438,8 +662,8 @@ def _encode_video(output, fig, render, frames, fps, progress):
         "-f", "rawvideo", "-pixel_format", "rgba", "-video_size", f"{width}x{height}",
         "-framerate", str(fps), "-i", "pipe:0", "-an", "-c:v", "libx264",
         "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p",
-        "-movflags", "+faststart", "-metadata", "title=Cart-pole LQR",
-        "-metadata", "comment=Nonlinear cart-pole; discrete LQR", str(staged),
+        "-movflags", "+faststart", "-metadata", "title=Cart-pole simulation",
+        "-metadata", "comment=Nonlinear cart-pole controller simulation", str(staged),
     ]
     try:
         # A file avoids filling a stderr pipe if the encoder emits many errors.
@@ -467,6 +691,11 @@ def _encode_video(output, fig, render, frames, fps, progress):
 def export_video(trial, force_limit, plant, recovery, output):
     """Write one H.264 MP4 with a frame for each control sample."""
     frames = np.asarray(trial["time"], dtype=float)
+    if "comparisons" in trial:
+        dt = frames[1] - frames[0]
+        duration = trial.get("comparison_settings", {}).get("duration_s",
+                    max(other["time"][-1] for other in [trial, *trial["comparisons"].values()]))
+        frames = np.arange(round(duration / dt) + 1) * dt
     fps = _video_fps(frames)
     configure_matplotlib()
     import matplotlib.pyplot as plt

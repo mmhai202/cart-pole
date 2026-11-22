@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 
 import numpy as np
 
 from cartpole import Plant
+from cartpole.controller import LQRController, MPCController, PIDController
 from cartpole.integration import advance, advance_actuator, predict_motor_force
 from cartpole.ekf import EKFSettings, EKF
 from cartpole.disturbance import DisturbanceObserver, DisturbanceObserverSettings
@@ -96,7 +97,8 @@ def validate_run(duration, dt, substeps, force_limit, recovery):
 def simulate(initial, K, force_limit, plant=Plant(), dt=0.02, duration=10.0,
              substeps=25, recovery=Recovery(), force_push=(),
              actuator=Actuator(), measurement_noise=MeasurementNoise(), ekf=EKFSettings(),
-             disturbance_observer=DisturbanceObserverSettings(), swing_up=SwingUpSettings()):
+             disturbance_observer=DisturbanceObserverSettings(), swing_up=SwingUpSettings(),
+             balance_controller=None, swing_up_plan=None):
     """Simulate the nonlinear plant until horizon or first detected rail violation.
 
     force_push contains external rectangular pulses (start, width, force).
@@ -143,15 +145,19 @@ def simulate(initial, K, force_limit, plant=Plant(), dt=0.02, duration=10.0,
         raise ValueError(f"LQR gain must contain {size} or {size + 1} finite numbers.")
     if gain.size == size + 1 and tau == 0:
         raise ValueError("An actuator-state LQR requires a nonzero actuator time constant.")
-    # Shift the desired motor force by -c*d as well as applying -c*d to the
-    # command. This preserves the configured DC cancellation with motor feedback.
-    compensation_scale = 1 + gain[size] if gain.size == size + 1 else 1.0
+    if balance_controller is None:
+        balance_controller = LQRController(plant, dt, force_limit, actuator_tau=tau, gain=gain)
+    compensation_scale = (balance_controller.compensation_scale
+                          if isinstance(balance_controller, LQRController) else 1.0)
     observer = (DisturbanceObserver(plant, dt, measurement_std, disturbance_observer, tau)
                 if disturbance_observer.enabled else None)
     swing_controller = None
     if swing_up.enabled:
         swing_controller = (DoubleSwingUpController(plant, swing_up, dt, force_limit, tau)
                             if size == 6 else SwingUpController(plant, swing_up))
+        if size == 6:
+            swing_controller.plan = swing_up_plan
+    balance_controller.reset()
 
     def observe(controller_state, previous_command, balancing, motor_force):
         if observer is None:
@@ -167,7 +173,7 @@ def simulate(initial, K, force_limit, plant=Plant(), dt=0.02, duration=10.0,
             observer_state[2::2] = wrap_angle(observer_state[2::2])
         return observer.update(observer_state, previous_command)
 
-    modes = np.zeros(n, dtype=int)  # 0: swing-up, 1: LQR
+    modes = np.zeros(n, dtype=int)  # 0: swing-up, 1: selected upright controller
     state[0] = initial
     peak_x = abs(initial[0])
     safe = True
@@ -182,14 +188,20 @@ def simulate(initial, K, force_limit, plant=Plant(), dt=0.02, duration=10.0,
                 estimated[k] = estimator.update(measured[k])
         else:
             estimated[k] = measured[k]
-        feedback = np.r_[estimated[k], estimated_motor_force[k]] if gain.size == size + 1 else estimated[k]
-        nominal_force[k] = (-gain @ feedback if swing_controller is None
-                            else swing_controller.command(estimated[k], gain, estimated_motor_force[k]))
+        if swing_controller is not None:
+            nominal_force[k] = swing_controller.command(estimated[k], gain, estimated_motor_force[k])
         modes[k] = int(swing_controller is None or swing_controller.balancing)
         estimated_disturbance[k] = observe(estimated[k], command[k - 1] if k else 0.0,
                                            modes[k], estimated_motor_force[k])
-        requested[k] = (nominal_force[k] - disturbance_observer.compensation_gain
-                        * compensation_scale * estimated_disturbance[k])
+        force_bias = -disturbance_observer.compensation_gain * compensation_scale * estimated_disturbance[k]
+        if modes[k]:
+            feedback = estimated[k].copy()
+            if swing_controller is not None:
+                feedback[2::2] = wrap_angle(feedback[2::2])
+            nominal_force[k] = balance_controller.command(feedback, estimated_motor_force[k], force_bias)
+        else:
+            balance_controller.reset()
+        requested[k] = nominal_force[k] + force_bias
         command[k] = np.clip(requested[k], -force_limit, force_limit)
         estimated_motor_force[k + 1] = predict_motor_force(estimated_motor_force[k], command[k], dt, tau)
         if tau == 0:
@@ -249,7 +261,7 @@ def simulate(initial, K, force_limit, plant=Plant(), dt=0.02, duration=10.0,
                                        "peak_abs_command_N": float(np.max(np.abs(plan.commands)))}
     friction = cart_friction_force(state[:last + 1], actual[:last + 1]
                                    + np.append(disturbance[:last], 0), plant)
-    return {"controller_mode": modes[:last], "time": time[:last + 1], "state": state[:last + 1], "force": applied[:last],
+    trial = {"controller_mode": modes[:last], "time": time[:last + 1], "state": state[:last + 1], "force": applied[:last],
             "actuator_force": actual[:last + 1], "command_force": command[:last],
             "estimated_state": estimated[:last + 1],
             "estimated_motor_force": estimated_motor_force[:last + 1],
@@ -258,3 +270,45 @@ def simulate(initial, K, force_limit, plant=Plant(), dt=0.02, duration=10.0,
             "measured_state": measured[:last + 1], "actuator_time_constant_s": tau,
             "cart_friction_force": friction,
             "requested_force": requested[:last], "disturbance": disturbance[:last], "metrics": metrics}
+    if size == 6 and swing_controller is not None:
+        trial["swing_up_plan"] = swing_controller.plan
+    return trial
+
+
+def simulate_comparison(experiment, design):
+    """Keep LQR as the primary trial and attach independently simulated ghosts."""
+    noise = experiment.noise
+    # A null seed normally means fresh noise. Resolve it once for a fair run.
+    if noise.seed is None:
+        noise = replace(noise, seed=int(np.random.SeedSequence().generate_state(1)[0]))
+    controllers = {
+        "LQR": LQRController(experiment.plant, experiment.dt, experiment.limit,
+                             actuator_tau=experiment.actuator.response_time_constant_s, gain=design["K"]),
+        "MPC": MPCController(experiment.plant, experiment.dt, experiment.limit, experiment.q,
+                             experiment.r, experiment.actuator.response_time_constant_s, experiment.mpc),
+        "PID": PIDController(experiment.plant, experiment.dt, experiment.limit, experiment.pid),
+    }
+    trials, plan = {}, None
+    for name, controller in controllers.items():
+        print(f"Simulating {name}...", flush=True)
+        trial = simulate(
+            experiment.initial, design["K"], experiment.limit, experiment.plant,
+            experiment.dt, experiment.duration, experiment.substeps, experiment.recovery,
+            force_push=experiment.pushes, actuator=experiment.actuator, measurement_noise=noise,
+            ekf=experiment.ekf, disturbance_observer=experiment.observer, swing_up=experiment.swing_up,
+            balance_controller=controller, swing_up_plan=plan,
+        )
+        trial["metrics"]["controller"] = name
+        trials[name] = trial
+        if name == "LQR":
+            plan = trial.get("swing_up_plan")
+    primary = trials.pop("LQR")
+    primary["comparisons"] = trials
+    pid = controllers["PID"]
+    primary["comparison_settings"] = {
+        "noise_seed": noise.seed, "duration_s": experiment.duration,
+        "mpc": asdict(experiment.mpc),
+        "pid": {**asdict(experiment.pid), **{key: getattr(pid, key).tolist() for key in ("kp", "ki", "kd")}},
+        "swing_up": "shared energy shaping / TVLQR; selected controllers act after upright capture",
+    }
+    return primary

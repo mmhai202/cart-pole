@@ -107,7 +107,8 @@ class DoubleSwingUpExperimentTests(unittest.TestCase):
         assert_allclose(trial['state'][0, [2, 4]], np.pi)
         self.assertEqual(trial['controller_mode'][0], 0)
         self.assertLess(trial['metrics']['first_balance_time_s'], x.pushes[1][0])
-        self.assertEqual(trial['controller_mode'][round(x.pushes[0][0] / x.dt)], 0)
+        # The example's first push is at 5 s, after upright capture (~4.32 s).
+        self.assertEqual(trial['controller_mode'][round(x.pushes[0][0] / x.dt)], 1)
         self.assertEqual(trial['controller_mode'][-1], 1)
         tail = trial['state'][trial['time'] >= x.duration - x.recovery.dwell].copy()
         tail[:, 2::2] = wrap_angle(tail[:, 2::2])

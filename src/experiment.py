@@ -6,7 +6,7 @@ import numpy as np
 
 from configuration import (
     experiment_settings, ekf_settings, observer_settings, physical_settings,
-    plant_settings, swing_up_settings,
+    plant_settings, swing_up_settings, comparison_settings,
 )
 from simulation import Recovery
 
@@ -20,6 +20,7 @@ class Experiment:
         self.ekf = ekf_settings(config)
         self.observer = observer_settings(config)
         self.swing_up = swing_up_settings(config)
+        self.comparison, self.mpc, self.pid = comparison_settings(config)
         self.plant = plant_settings(config)
         self.actuator, self.noise = physical_settings(config)
         simulation = config["simulation"]
